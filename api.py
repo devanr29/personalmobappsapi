@@ -392,7 +392,11 @@ def search():
     query = (request.args.get("q") or "").strip()
     if not query:
         return _err("VALIDATION_ERROR", "q is required.", 400)
-    return _ok(semantic_search(query))
+    results = semantic_search(query)
+    return _ok([
+        {"sourceType": r["source_type"], "content": r["content"], "score": r["score"]}
+        for r in results
+    ])
 
 
 # ================================================================

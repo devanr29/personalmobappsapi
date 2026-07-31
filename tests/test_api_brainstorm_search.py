@@ -20,7 +20,7 @@ def test_get_search(client, auth_headers):
     with patch("api.semantic_search", return_value=results) as mock_search:
         resp = client.get("/api/search?q=milk", headers=auth_headers)
     assert resp.status_code == 200
-    assert resp.get_json()["data"] == results
+    assert resp.get_json()["data"] == [{"sourceType": "note", "content": "buy milk", "score": 0.8}]
     mock_search.assert_called_once_with("milk")
 
 
