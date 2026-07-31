@@ -16,7 +16,7 @@ from features.calendar import (
     delete_event_by_id,
 )
 from features.reminders import get_reminders_structured
-from features.notes import get_notes_structured
+from features.notes import get_notes_structured, save_note, edit_note, delete_note
 from features.ideas import get_ideas_structured
 from features.budget import compute_and_persist_budget
 from features.quotes import get_quote_of_day
@@ -211,20 +211,54 @@ def events_delete(event_id):
 
 
 # ================================================================
-# REMINDERS / NOTES / IDEAS — read-only structured lists
+# REMINDERS — read-only structured list
 # ================================================================
-
-
 @api_bp.route("/reminders", methods=["GET"])
 def reminders_list():
     return _ok(get_reminders_structured())
 
 
+# ================================================================
+# NOTES — index-addressed (Google Sheets rows have no stable id;
+# clients must refetch after any mutation instead of reordering
+# their local list). See features/notes.py's get_notes_structured().
+# ================================================================
 @api_bp.route("/notes", methods=["GET"])
 def notes_list():
     return _ok(get_notes_structured(range_all=True))
 
 
+@api_bp.route("/notes", methods=["POST"])
+def notes_create():
+    body    = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return _err("VALIDATION_ERROR", "message is required.", 400)
+    save_note(message)
+    return _ok({"created": True})
+
+
+@api_bp.route("/notes/<int:index>", methods=["PATCH"])
+def notes_edit(index):
+    body    = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return _err("VALIDATION_ERROR", "message is required.", 400)
+    edit_note(message, index=index)
+    return _ok({"index": index, "updated": True})
+
+
+@api_bp.route("/notes/<int:index>", methods=["DELETE"])
+def notes_delete(index):
+    result = delete_note(index=index)
+    if not result.startswith("🗑️"):
+        return _err("NOT_FOUND", f"No note at index {index}.", 404)
+    return _ok({"index": index, "deleted": True})
+
+
+# ================================================================
+# IDEAS — index-addressed, same caveats as NOTES above.
+# ================================================================
 @api_bp.route("/ideas", methods=["GET"])
 def ideas_list():
     return _ok(get_ideas_structured(range_all=True))
