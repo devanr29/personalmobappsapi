@@ -25,6 +25,7 @@ from features.notes import get_notes_structured, save_note, edit_note, delete_no
 from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_idea
 from features.budget import compute_and_persist_budget
 from features.quotes import get_quote_of_day
+from features.news import get_news_structured, summarize_article
 from push import register_push_token
 from tracer import logger
 
@@ -344,6 +345,29 @@ def budget_post():
 
     snapshot = state_get("last_budget_snapshot")
     return _ok(json.loads(snapshot))
+
+
+# ================================================================
+# NEWS
+# ================================================================
+@api_bp.route("/news", methods=["GET"])
+def news_list():
+    topic = (request.args.get("topic") or "").strip()
+    if not topic:
+        return _err("VALIDATION_ERROR", "topic is required.", 400)
+    return _ok(get_news_structured(topic))
+
+
+@api_bp.route("/news/article", methods=["GET"])
+def news_article():
+    url   = (request.args.get("url") or "").strip()
+    title = (request.args.get("title") or "").strip()
+    if not url or not title:
+        return _err("VALIDATION_ERROR", "url and title are required.", 400)
+    source      = request.args.get("source", "")
+    published   = request.args.get("publishedAt", "")
+    description = request.args.get("description", "")
+    return _ok({"summary": summarize_article(title, url, source, published, description)})
 
 
 # ================================================================
