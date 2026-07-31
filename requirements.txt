@@ -14,3 +14,4 @@ pytz
 groq
 tracer
 truststore
+pytest
