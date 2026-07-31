@@ -1,4 +1,5 @@
 import sqlite3, datetime, re, json
+from googleapiclient.errors import HttpError
 from config import now_jkt, localize_jkt
 from google_auth import get_google_services
 from ai.groq_client import groq_complete
@@ -283,3 +284,51 @@ def edit_event(
         return f"✏️ Event _{old_title}_ updated!"
     except Exception as e:
         return f"⚠️ Could not edit event: {e}"
+
+# ================================================================
+# ID-BASED DELETE/EDIT — for the mobile REST API, which already holds
+# the real event id from get_events_structured() (no keyword lookup
+# needed). Returns False if the id doesn't exist; raises on any other
+# failure. See features/tasks.py's complete_task_by_id() for the same
+# pattern — Google APIs return 400 or 404 for an unknown/malformed id.
+# ================================================================
+@trace
+def delete_event_by_id(event_id: str) -> bool:
+    try:
+        calendar_svc, _, _ = get_google_services()
+        calendar_svc.events().delete(calendarId="primary", eventId=event_id).execute()
+        return True
+    except HttpError as e:
+        if e.resp.status in (400, 404, 410):
+            return False
+        raise
+
+@trace
+def edit_event_by_id(
+    event_id: str,
+    title: str = None,
+    start: str = None,
+    end: str = None,
+    description: str = None,
+) -> bool:
+    try:
+        calendar_svc, _, _ = get_google_services()
+        body = {}
+        if title:
+            body["summary"] = title
+        if start:
+            dt_start = localize_jkt(datetime.datetime.strptime(start, "%Y-%m-%d %H:%M"))
+            body["start"] = {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Jakarta"}
+        if end:
+            dt_end = localize_jkt(datetime.datetime.strptime(end, "%Y-%m-%d %H:%M"))
+            body["end"] = {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Jakarta"}
+        if description is not None:
+            body["description"] = description
+        if not body:
+            return True
+        calendar_svc.events().patch(calendarId="primary", eventId=event_id, body=body).execute()
+        return True
+    except HttpError as e:
+        if e.resp.status in (400, 404, 410):
+            return False
+        raise

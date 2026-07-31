@@ -8,7 +8,13 @@ from database import clear_conv_history, save_conv_turn, state_get
 from ai.classifier import classify_intent
 from intents import route_intent
 from features.tasks import get_tasks_structured, complete_task_by_id, delete_task_by_id
-from features.calendar import get_events_structured
+from features.calendar import (
+    get_events_structured,
+    save_event,
+    parse_event_with_ai,
+    edit_event_by_id,
+    delete_event_by_id,
+)
 from features.reminders import get_reminders_structured
 from features.notes import get_notes_structured
 from features.ideas import get_ideas_structured
@@ -149,11 +155,64 @@ def tasks_delete(task_id):
 
 
 # ================================================================
-# EVENTS / REMINDERS / NOTES / IDEAS — read-only structured lists
+# EVENTS
 # ================================================================
 @api_bp.route("/events", methods=["GET"])
 def events_list():
-    return _ok(get_events_structured())
+    days_raw = request.args.get("days")
+    if days_raw is None:
+        return _ok(get_events_structured())
+    try:
+        days = int(days_raw)
+    except ValueError:
+        return _err("VALIDATION_ERROR", "days must be an integer.", 400)
+    return _ok(get_events_structured(days_ahead=days))
+
+
+@api_bp.route("/events", methods=["POST"])
+def events_create():
+    body = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+
+    if message:
+        parsed = parse_event_with_ai(message)
+        if parsed is None:
+            return _err("VALIDATION_ERROR", "Could not parse an event from that message.", 400)
+        save_event(parsed["title"], parsed["start"], parsed.get("end") or None, parsed.get("description", ""))
+        return _ok({"created": True})
+
+    title = (body.get("title") or "").strip()
+    start = (body.get("start") or "").strip()
+    if not title or not start:
+        return _err("VALIDATION_ERROR", "message, or title and start, is required.", 400)
+    save_event(title, start, body.get("end") or None, body.get("description", ""))
+    return _ok({"created": True})
+
+
+@api_bp.route("/events/<event_id>", methods=["PATCH"])
+def events_edit(event_id):
+    body = request.get_json(silent=True) or {}
+    if not edit_event_by_id(
+        event_id,
+        title=body.get("title"),
+        start=body.get("start"),
+        end=body.get("end"),
+        description=body.get("description"),
+    ):
+        return _err("NOT_FOUND", f"No event with id {event_id}.", 404)
+    return _ok({"id": event_id, "updated": True})
+
+
+@api_bp.route("/events/<event_id>", methods=["DELETE"])
+def events_delete(event_id):
+    if not delete_event_by_id(event_id):
+        return _err("NOT_FOUND", f"No event with id {event_id}.", 404)
+    return _ok({"id": event_id, "deleted": True})
+
+
+# ================================================================
+# REMINDERS / NOTES / IDEAS — read-only structured lists
+# ================================================================
 
 
 @api_bp.route("/reminders", methods=["GET"])
