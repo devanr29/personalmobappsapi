@@ -184,6 +184,46 @@ def delete_reminder(keyword: str) -> str:
         return f"⚠️ Could not delete reminder: {e}"
 
 # ================================================================
+# ID-BASED DELETE — for the mobile REST API, which already holds the
+# real reminder id from get_reminders_structured() (no keyword
+# matching needed). Returns False if the id doesn't exist.
+# ================================================================
+@trace
+def delete_reminder_by_id(reminder_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    row  = conn.execute(
+        "SELECT id, content FROM reminders WHERE id = ?", (reminder_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+    conn.commit()
+    conn.close()
+
+    # Best-effort: also remove the matching Google Calendar event.
+    try:
+        calendar_svc, _, _ = get_google_services()
+        now    = localize_jkt(now_jkt())
+        result = calendar_svc.events().list(
+            calendarId="primary",
+            timeMin=now.isoformat(),
+            maxResults=20,
+            singleEvents=True,
+            orderBy="startTime",
+            q=row[1],
+        ).execute()
+        for ev in result.get("items", []):
+            if row[1].lower() in ev.get("summary", "").lower():
+                calendar_svc.events().delete(calendarId="primary", eventId=ev["id"]).execute()
+                break
+    except Exception:
+        pass
+
+    return True
+
+# ================================================================
 # SCHEDULER JOB — called every minute by APScheduler
 # ================================================================
 @trace

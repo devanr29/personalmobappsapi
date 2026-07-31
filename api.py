@@ -15,7 +15,12 @@ from features.calendar import (
     edit_event_by_id,
     delete_event_by_id,
 )
-from features.reminders import get_reminders_structured
+from features.reminders import (
+    get_reminders_structured,
+    save_reminder,
+    parse_reminder_with_ai,
+    delete_reminder_by_id,
+)
 from features.notes import get_notes_structured, save_note, edit_note, delete_note
 from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_idea
 from features.budget import compute_and_persist_budget
@@ -216,6 +221,31 @@ def events_delete(event_id):
 @api_bp.route("/reminders", methods=["GET"])
 def reminders_list():
     return _ok(get_reminders_structured())
+
+
+@api_bp.route("/reminders", methods=["POST"])
+def reminders_create():
+    body    = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+
+    if message:
+        content, remind_at = parse_reminder_with_ai(message)
+        save_reminder(content, remind_at)
+        return _ok({"created": True})
+
+    content   = (body.get("content") or "").strip()
+    remind_at = (body.get("remindAt") or "").strip()
+    if not content or not remind_at:
+        return _err("VALIDATION_ERROR", "message, or content and remindAt, is required.", 400)
+    save_reminder(content, remind_at)
+    return _ok({"created": True})
+
+
+@api_bp.route("/reminders/<int:reminder_id>", methods=["DELETE"])
+def reminders_delete(reminder_id):
+    if not delete_reminder_by_id(reminder_id):
+        return _err("NOT_FOUND", f"No reminder with id {reminder_id}.", 404)
+    return _ok({"id": reminder_id, "deleted": True})
 
 
 # ================================================================
