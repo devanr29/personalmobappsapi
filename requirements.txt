@@ -1,0 +1,16 @@
+flask
+google-auth
+google-auth-oauthlib
+google-api-python-client
+beautifulsoup4
+apscheduler
+sumy
+numpy
+requests
+python-dotenv
+google-genai
+psycopg2-binary
+pytz
+groq
+tracer
+truststore
