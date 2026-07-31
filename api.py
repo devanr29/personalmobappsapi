@@ -26,6 +26,8 @@ from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_id
 from features.budget import compute_and_persist_budget
 from features.quotes import get_quote_of_day
 from features.news import get_news_structured, summarize_article
+from ai.brainstorm import ai_brainstorm
+from features.memory import semantic_search
 from push import register_push_token
 from tracer import logger
 
@@ -368,6 +370,29 @@ def news_article():
     published   = request.args.get("publishedAt", "")
     description = request.args.get("description", "")
     return _ok({"summary": summarize_article(title, url, source, published, description)})
+
+
+# ================================================================
+# BRAINSTORM
+# ================================================================
+@api_bp.route("/brainstorm", methods=["POST"])
+def brainstorm():
+    body  = request.get_json(silent=True) or {}
+    topic = (body.get("topic") or "").strip()
+    if not topic:
+        return _err("VALIDATION_ERROR", "topic is required.", 400)
+    return _ok({"text": ai_brainstorm(topic)})
+
+
+# ================================================================
+# SEARCH — semantic search over notes/ideas memory
+# ================================================================
+@api_bp.route("/search", methods=["GET"])
+def search():
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return _err("VALIDATION_ERROR", "q is required.", 400)
+    return _ok(semantic_search(query))
 
 
 # ================================================================
