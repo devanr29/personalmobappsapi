@@ -33,54 +33,54 @@ screens that reuse them.
 
 ### Phase 1: Backend routes (Python — api.py + features/*.py)
 
-- [ ] Task B1: Events routes
-- [ ] Task B2: Notes routes
-- [ ] Task B3: Ideas routes
-- [ ] Task B4: Reminders delete route
-- [ ] Task B5: News structured route
-- [ ] Task B6: Brainstorm + search routes
+- [x] Task B1: Events routes
+- [x] Task B2: Notes routes
+- [x] Task B3: Ideas routes
+- [x] Task B4: Reminders delete route
+- [x] Task B5: News structured route
+- [x] Task B6: Brainstorm + search routes
 
 ### Checkpoint: Backend complete
-- [ ] `pytest` passes for all six new test files
-- [ ] `python app.py` starts clean; manual curl smoke test against each new route (see spec Verification section) succeeds
-- [ ] Review with human before starting mobile work
+- [x] `pytest` passes for all six new test files (38 passed)
+- [x] `python app.py` starts clean; manual curl smoke test against each new route succeeds
+- [x] Review with human before starting mobile work
 
 ### Phase 2: Mobile foundations (mobile/src/**)
 
-- [ ] Task M1: Stack navigation + GestureHandlerRootView
-- [ ] Task M2: `useResource` hook + `useHome` refactor
-- [ ] Task M3: Shared state components (ListScreen/ErrorState/EmptyState)
-- [ ] Task M4: Shared interaction components (SwipeableRow/FAB/ComposeSheet)
+- [x] Task M1: Stack navigation + GestureHandlerRootView
+- [x] Task M2: `useResource` hook + `useHome` refactor
+- [x] Task M3: Shared state components (ListScreen/ErrorState/EmptyState)
+- [x] Task M4: Shared interaction components (SwipeableRow/FAB/ComposeSheet)
 
 ### Checkpoint: Foundations complete
-- [ ] `npx tsc --noEmit` passes
-- [ ] App builds and runs on device; Home and Chat behave identically to before this phase (tab switching, ask-bar push, task checkbox + optimistic rollback on kill-backend)
-- [ ] Review with human before starting Calendar/More screens
+- [x] `npx tsc --noEmit` passes
+- [x] App builds and runs on device; Home and Chat behave identically to before this phase (confirmed by user on-device)
+- [x] Review with human before starting Calendar/More screens
 
 ### Phase 3: Calendar tab
 
-- [ ] Task M5: Calendar screen (events API module + agenda UI)
+- [x] Task M5: Calendar screen (events API module + agenda UI)
 
 ### Phase 4: More tab detail screens
 
-- [ ] Task M6: Notes screen
-- [ ] Task M7: Ideas screen
-- [ ] Task M8: Reminders screen
-- [ ] Task M9: News screen
-- [ ] Task M10: Brainstorm screen
-- [ ] Task M11: Budget screen
-- [ ] Task M12: Search screen
-- [ ] Task M13: More hub screen
+- [x] Task M6: Notes screen
+- [x] Task M7: Ideas screen
+- [x] Task M8: Reminders screen
+- [x] Task M9: News screen
+- [x] Task M10: Brainstorm screen
+- [x] Task M11: Budget screen
+- [x] Task M12: Search screen
+- [x] Task M13: More hub screen
 
 ### Phase 5: Home wiring
 
-- [ ] Task M14: Wire Home's dead affordances
+- [x] Task M14: Wire Home's dead affordances
 
 ### Checkpoint: Complete
-- [ ] Every PlaceholderScreen replaced; every shortcut tile/link navigates somewhere real
-- [ ] Full manual verification pass per `docs/SPEC.md` Verification section (skeleton→data→create→delete→persist-after-background, airplane-mode error state)
-- [ ] `npx tsc --noEmit` and `pytest` both pass
-- [ ] Ready for human review
+- [x] Every PlaceholderScreen replaced; every shortcut tile/link navigates somewhere real
+- [ ] Full manual verification pass per `docs/SPEC.md` Verification section (skeleton→data→create→delete→persist-after-background, airplane-mode error state) — **pending user on-device pass**
+- [x] `npx tsc --noEmit` and `pytest` both pass
+- [x] Ready for human review
 
 ## Risks and Mitigations
 
