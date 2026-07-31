@@ -17,7 +17,7 @@ from features.calendar import (
 )
 from features.reminders import get_reminders_structured
 from features.notes import get_notes_structured, save_note, edit_note, delete_note
-from features.ideas import get_ideas_structured
+from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_idea
 from features.budget import compute_and_persist_budget
 from features.quotes import get_quote_of_day
 from push import register_push_token
@@ -262,6 +262,34 @@ def notes_delete(index):
 @api_bp.route("/ideas", methods=["GET"])
 def ideas_list():
     return _ok(get_ideas_structured(range_all=True))
+
+
+@api_bp.route("/ideas", methods=["POST"])
+def ideas_create():
+    body    = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return _err("VALIDATION_ERROR", "message is required.", 400)
+    save_idea(message)
+    return _ok({"created": True})
+
+
+@api_bp.route("/ideas/<int:index>", methods=["PATCH"])
+def ideas_edit(index):
+    body    = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return _err("VALIDATION_ERROR", "message is required.", 400)
+    edit_idea(message, index=index)
+    return _ok({"index": index, "updated": True})
+
+
+@api_bp.route("/ideas/<int:index>", methods=["DELETE"])
+def ideas_delete(index):
+    result = delete_idea(index=index)
+    if not result.startswith("🗑️"):
+        return _err("NOT_FOUND", f"No idea at index {index}.", 404)
+    return _ok({"index": index, "deleted": True})
 
 
 # ================================================================
