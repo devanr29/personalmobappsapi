@@ -114,17 +114,42 @@ def _compute_budget(user_input: str) -> dict | None:
         if not any(exp["name"].lower() in p or p in exp["name"].lower() for p in paid_fixed)
     ]
 
-    remaining_var = []
+    # Every configured variable budget is included here, even when fully
+    # spent or overspent — a strict "leftover > 0" filter used to drop a
+    # category the moment spend caught up with its cap (e.g. spent exactly
+    # equal to budget), silently disappearing it from the breakdown instead
+    # of showing "Rp 0 remaining". remaining is clamped to >= 0 so an
+    # overspend can't reduce total_deductions below what's actually still
+    # owed; the overspend itself is reported separately for visibility.
+    remaining_var  = []
+    matched_spend_keys = set()
     for var in variable_budgets:
         name_lower = var["name"].lower()
         spent = 0
         for k, v in spent_variable.items():
             if name_lower in k or k in name_lower:
                 spent = v
+                matched_spend_keys.add(k)
                 break
         leftover = var["budget"] - spent
-        if leftover > 0:
-            remaining_var.append({"name": var["name"], "remaining": leftover, "spent": spent})
+        remaining_var.append({
+            "name": var["name"],
+            "remaining": max(leftover, 0),
+            "spent": spent,
+            "over_budget": max(-leftover, 0),
+        })
+
+    # spent_variable entries that matched no configured fixed/variable name
+    # (e.g. a one-off category like "Claude") — surfaced so the amount
+    # doesn't silently vanish from the breakdown. Not added to
+    # total_deductions: remaining_money is already net of this spend, and
+    # there's no ongoing budget line to reserve for it going forward.
+    original_spent = parsed.get("spent_variable") or {}
+    unmatched_spending = [
+        {"name": name, "amount": amount}
+        for name, amount in original_spent.items()
+        if name.lower() not in matched_spend_keys
+    ]
 
     pending_amounts = [
         exp for exp in fixed_expenses
@@ -152,6 +177,7 @@ def _compute_budget(user_input: str) -> dict | None:
         "still_owed": still_owed,
         "pending_amounts": pending_amounts,
         "remaining_var": remaining_var,
+        "unmatched_spending": unmatched_spending,
         "total_still_owed": total_still_owed,
         "total_var_remaining": total_var_remaining,
         "total_deductions": total_deductions,
@@ -173,6 +199,7 @@ def _format_budget(data: dict) -> str:
     still_owed          = data["still_owed"]
     pending_amounts     = data["pending_amounts"]
     remaining_var       = data["remaining_var"]
+    unmatched_spending  = data["unmatched_spending"]
     total_still_owed    = data["total_still_owed"]
     total_var_remaining = data["total_var_remaining"]
     total_deductions    = data["total_deductions"]
@@ -194,12 +221,30 @@ def _format_budget(data: dict) -> str:
     if remaining_var:
         lines.append("🗂️ *Remaining variable budgets:*")
         for v in remaining_var:
-            lines.append(f"  • {v['name']}: {fmt(v['remaining'])} (spent {fmt(v['spent'])})")
+            if v["over_budget"] > 0:
+                lines.append(f"  • {v['name']}: ⚠️ over by {fmt(v['over_budget'])} (spent {fmt(v['spent'])})")
+            else:
+                lines.append(f"  • {v['name']}: {fmt(v['remaining'])} (spent {fmt(v['spent'])})")
         lines.append(f"  ➤ Total: {fmt(total_var_remaining)}\n")
+
+    if unmatched_spending:
+        lines.append("🔸 *Spent but not tracked as a budget category:*")
+        for item in unmatched_spending:
+            lines.append(f"  • {item['name']}: {fmt(item['amount'])}")
+        lines.append(
+            "  _Not counted in Total deductions below — your current money already reflects this "
+            'spend. Say "add variable <name> <amount>" if you want it tracked going forward._\n'
+        )
 
     lines.append("📊 *Summary:*")
     lines.append(f"  Money in hand:      {fmt(remaining)}")
     lines.append(f"  Total deductions:   -{fmt(total_deductions)}")
+    for e in still_owed:
+        lines.append(f"    - {e['name']}: {fmt(e['amount'])}")
+    for e in pending_amounts:
+        lines.append(f"    - {e['name']} (pending): {fmt(e['amount'])}")
+    for v in remaining_var:
+        lines.append(f"    - {v['name']} (remaining): {fmt(v['remaining'])}")
     lines.append(f"  Free money left:    {fmt(free_money)}")
     lines.append(f"  Days until payday:  {days_left} days\n")
 
@@ -246,4 +291,8 @@ def compute_and_persist_budget(user_input: str) -> dict | None:
         "computedAt":    str(now_jkt()),
     }
     state_set("last_budget_snapshot", json.dumps(snapshot))
+    # Full breakdown (still_owed, remaining_var, unmatched_spending, ...) for
+    # the mobile app's Budget screen — the flattened snapshot above only
+    # carries the 7 summary fields GET /api/budget has always returned.
+    state_set("last_budget_breakdown", json.dumps(data))
     return data
