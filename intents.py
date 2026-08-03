@@ -150,16 +150,25 @@ def route_intent(intent: str, params: dict, incoming: str) -> dict:
         if data is None:
             return _text(_budget_interactive_prompt())
         text = _format_budget(data)
+        # Line items that sum to total_deductions (same set _format_budget's
+        # "Total deductions" summary lists) so the chat bubble can show what
+        # the total is actually made of, not just the number.
+        deduction_breakdown = (
+            [{"name": e["name"], "amount": e["amount"]} for e in data["still_owed"]]
+            + [{"name": e["name"], "amount": e["amount"]} for e in data["pending_amounts"]]
+            + [{"name": v["name"], "amount": v["remaining"]} for v in data["remaining_var"]]
+        )
         return {
             "kind": "budget",
             "text": text,
             "data": {
-                "remaining":    data["remaining"],
-                "deductions":   data["total_deductions"],
-                "free":         data["free_money"],
-                "dailyBudget":  data["daily_budget"],
-                "daysToPayday": data["days_left"],
-                "statusLevel":  data["status_level"],
+                "remaining":           data["remaining"],
+                "deductions":          data["total_deductions"],
+                "free":                data["free_money"],
+                "dailyBudget":         data["daily_budget"],
+                "daysToPayday":        data["days_left"],
+                "statusLevel":         data["status_level"],
+                "deductionBreakdown":  deduction_breakdown,
             },
         }
 
