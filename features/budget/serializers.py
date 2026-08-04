@@ -66,6 +66,22 @@ def camel_goal(g: dict) -> dict:
     }
 
 
+def camel_alert(a: dict) -> dict:
+    return {
+        "id": a["id"], "kind": a["kind"], "title": a["title"], "body": a["body"],
+        "sentAt": a["sent_at"], "delivered": a["delivered"], "readAt": a["read_at"],
+    }
+
+
+def camel_alert_prefs(p: dict) -> dict:
+    return {
+        "dailyCheckinEnabled": p["daily_checkin_enabled"], "dailyCheckinTime": p["daily_checkin_time"],
+        "billDueLeadDays": p["bill_due_lead_days"], "overBudgetEnabled": p["over_budget_enabled"],
+        "overBudgetThresholdPct": p["over_budget_threshold_pct"],
+        "lowDailyBudgetThreshold": p["low_daily_budget_threshold"],
+    }
+
+
 def camel_seed_result(result: dict) -> dict:
     return {
         "wallets": [camel_wallet(w) for w in result["wallets"]],

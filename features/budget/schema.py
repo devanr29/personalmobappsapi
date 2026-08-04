@@ -148,8 +148,39 @@ def _migration_0():
     ]
 
 
+def _add_column_if_missing(conn, table, column, decl):
+    """ALTER TABLE ... ADD COLUMN is not idempotent on SQLite (no IF NOT
+    EXISTS support, unlike Postgres) — and every statement above is
+    written to be safely re-runnable if a migration step crashes halfway
+    through and re-executes on next boot. Probe first, in whichever
+    dialect is active, to preserve that guarantee."""
+    if IS_PG:
+        exists = conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+            (table, column),
+        ).fetchone() is not None
+    else:
+        exists = any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})").fetchall())
+    if not exists:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _migration_1():
+    """Adds the fields the in-app alert inbox needs: a human-readable
+    title/body (the log row itself becomes the inbox item, not just a
+    dedupe marker), whether push delivery actually succeeded, and when
+    the user read it."""
+    def _add_alert_log_columns(conn):
+        _add_column_if_missing(conn, "budget_alert_log", "title", "TEXT")
+        _add_column_if_missing(conn, "budget_alert_log", "body", "TEXT")
+        _add_column_if_missing(conn, "budget_alert_log", "delivered", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(conn, "budget_alert_log", "read_at", "TEXT")
+
+    return [_add_alert_log_columns]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
-MIGRATIONS = [_migration_0()]
+MIGRATIONS = [_migration_0(), _migration_1()]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -160,7 +191,10 @@ def init_budget_schema():
     conn = db_conn()
     for step in MIGRATIONS[current:]:
         for statement in step:
-            conn.execute(statement)
+            if callable(statement):
+                statement(conn)
+            else:
+                conn.execute(statement)
     conn.commit()
     conn.close()
     state_set("budget_schema_version", str(BUDGET_SCHEMA_VERSION))

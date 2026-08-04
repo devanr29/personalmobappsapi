@@ -8,7 +8,8 @@ from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_
 from features.budget import repo, service
 from features.budget.errors import BudgetError
 from features.budget.serializers import (
-    camel_bill, camel_budget_breakdown, camel_category, camel_goal, camel_seed_result, camel_transaction, camel_wallet,
+    camel_alert, camel_alert_prefs, camel_bill, camel_budget_breakdown, camel_category, camel_goal,
+    camel_seed_result, camel_transaction, camel_wallet,
 )
 
 budget_bp = Blueprint("budget", __name__)
@@ -404,3 +405,42 @@ def goals_contribute(goal_id):
         "transaction": camel_transaction(result["transaction"]) if result["transaction"] else None,
         "summary": summary,
     }, status=201)
+
+
+# ================================================================
+# ALERTS — in-app inbox (primary channel) + preferences. Push, when
+# tokens are registered, is delivered on top by the scheduler job
+# (features/budget/alerts.py); the inbox works with zero push infra.
+# ================================================================
+@budget_bp.route("/alerts", methods=["GET"])
+def alerts_list():
+    unread_only = bool(request.args.get("unreadOnly"))
+    limit = min(_int_arg("limit") or 20, 100)
+    alerts, unread_count = repo.get_alerts(unread_only=unread_only, limit=limit)
+    return ok({"items": [camel_alert(a) for a in alerts]}, meta={"unreadCount": unread_count})
+
+
+@budget_bp.route("/alerts/<int:alert_id>/read", methods=["POST"])
+def alerts_mark_read(alert_id):
+    repo.mark_alert_read(alert_id)
+    return ok({"id": alert_id, "read": True})
+
+
+@budget_bp.route("/alerts/prefs", methods=["GET"])
+def alert_prefs_get():
+    return ok(camel_alert_prefs(repo.get_alert_prefs()))
+
+
+@budget_bp.route("/alerts/prefs", methods=["PATCH"])
+def alert_prefs_edit():
+    body = request.get_json(silent=True) or {}
+    fields = {}
+    for camel, snake in (
+        ("dailyCheckinEnabled", "daily_checkin_enabled"), ("dailyCheckinTime", "daily_checkin_time"),
+        ("billDueLeadDays", "bill_due_lead_days"), ("overBudgetEnabled", "over_budget_enabled"),
+        ("overBudgetThresholdPct", "over_budget_threshold_pct"),
+        ("lowDailyBudgetThreshold", "low_daily_budget_threshold"),
+    ):
+        if camel in body:
+            fields[snake] = body[camel]
+    return ok(camel_alert_prefs(repo.update_alert_prefs(**fields)))

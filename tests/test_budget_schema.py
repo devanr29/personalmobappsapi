@@ -82,6 +82,15 @@ def test_existing_bot_state_rows_survive_a_run_against_a_real_db_copy(tmp_path):
     conn.close()
 
     for key, value in before.items():
+        if key == "budget_schema_version":
+            # The one key that's SUPPOSED to change: a copy of the real
+            # (older) bot.db should get migrated forward to whatever this
+            # codebase's current BUDGET_SCHEMA_VERSION is, not stay pinned
+            # to whatever version the copy happened to be at.
+            import features.budget.schema as schema_module
+            assert int(after[key]) == schema_module.BUDGET_SCHEMA_VERSION
+            assert int(after[key]) >= int(value)
+            continue
         assert after.get(key) == value, f"bot_state[{key}] changed or disappeared"
 
     del os.environ["DB_PATH"]

@@ -197,3 +197,29 @@ def test_goal_crud_and_contribute_routes(client, auth_headers):
         conn.execute("DELETE FROM budget_wallets WHERE id = ?", (wallet["id"],))
         conn.commit()
         conn.close()
+
+
+def test_alerts_list_and_prefs_routes(client, auth_headers):
+    resp = client.get("/api/budget/alerts", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "items" in body["data"]
+    assert "unreadCount" in body["meta"]
+
+    resp = client.get("/api/budget/alerts/prefs", headers=auth_headers)
+    assert resp.status_code == 200
+    prefs = resp.get_json()["data"]
+    assert "dailyCheckinEnabled" in prefs
+
+    resp = client.patch("/api/budget/alerts/prefs", headers=auth_headers, json={"overBudgetThresholdPct": 90})
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]["overBudgetThresholdPct"] == 90
+
+    # restore default so this test is repeatable
+    client.patch("/api/budget/alerts/prefs", headers=auth_headers, json={"overBudgetThresholdPct": 80})
+
+
+def test_alerts_mark_read_route(client, auth_headers):
+    resp = client.post("/api/budget/alerts/999999/read", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]["read"] is True

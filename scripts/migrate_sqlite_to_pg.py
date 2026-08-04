@@ -89,7 +89,7 @@ TABLES = [
         "over_budget_enabled", "over_budget_threshold_pct",
         "low_daily_budget_threshold", "updated_at",
     ], None),
-    ("budget_alert_log", ["id", "kind", "ref_key", "sent_at"], None),
+    ("budget_alert_log", ["id", "kind", "ref_key", "sent_at", "title", "body", "delivered", "read_at"], None),
 ]
 
 # Tables whose "id" column is backed by a Postgres SERIAL sequence. Copying

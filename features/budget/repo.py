@@ -470,6 +470,113 @@ def ensure_alert_prefs():
     conn.close()
 
 
+_ALERT_PREFS_COLS = (
+    "daily_checkin_enabled, daily_checkin_time, bill_due_lead_days, "
+    "over_budget_enabled, over_budget_threshold_pct, low_daily_budget_threshold, updated_at"
+)
+
+
+def get_alert_prefs():
+    ensure_alert_prefs()
+    conn = db_conn()
+    row = conn.execute("SELECT " + _ALERT_PREFS_COLS + " FROM budget_alert_prefs WHERE id = 1").fetchone()
+    conn.close()
+    return {
+        "daily_checkin_enabled": bool(row[0]), "daily_checkin_time": row[1],
+        "bill_due_lead_days": row[2], "over_budget_enabled": bool(row[3]),
+        "over_budget_threshold_pct": row[4], "low_daily_budget_threshold": row[5],
+        "updated_at": row[6],
+    }
+
+
+_ALERT_PREFS_UPDATABLE = {
+    "daily_checkin_enabled", "daily_checkin_time", "bill_due_lead_days",
+    "over_budget_enabled", "over_budget_threshold_pct", "low_daily_budget_threshold",
+}
+_ALERT_PREFS_BOOL_FIELDS = {"daily_checkin_enabled", "over_budget_enabled"}
+
+
+def update_alert_prefs(**fields):
+    ensure_alert_prefs()
+    sets, params = [], []
+    for key, value in fields.items():
+        if key not in _ALERT_PREFS_UPDATABLE:
+            continue
+        if key in _ALERT_PREFS_BOOL_FIELDS:
+            value = int(value)
+        sets.append(key + " = ?")
+        params.append(value)
+    if sets:
+        sets.append("updated_at = ?")
+        params.append(str(now_jkt()))
+        conn = db_conn()
+        conn.execute("UPDATE budget_alert_prefs SET " + ", ".join(sets) + " WHERE id = 1", params)
+        conn.commit()
+        conn.close()
+    return get_alert_prefs()
+
+
+def create_alert_log(kind, ref_key, title, body):
+    """Raises the dialect's IntegrityError on a UNIQUE(kind, ref_key)
+    violation — that's the dedupe guard, callers (alerts.run_budget_alerts)
+    catch it and treat it as 'already fired, skip'."""
+    conn = db_conn()
+    try:
+        conn.execute(
+            "INSERT INTO budget_alert_log (kind, ref_key, sent_at, title, body, delivered) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (kind, ref_key, str(now_jkt()), title, body),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def mark_alert_delivered(kind, ref_key):
+    conn = db_conn()
+    conn.execute(
+        "UPDATE budget_alert_log SET delivered = 1 WHERE kind = ? AND ref_key = ?", (kind, ref_key)
+    )
+    conn.commit()
+    conn.close()
+
+
+_ALERT_LOG_COLS = "id, kind, ref_key, sent_at, title, body, delivered, read_at"
+
+
+def _alert_row(row):
+    return {
+        "id": row[0], "kind": row[1], "ref_key": row[2], "sent_at": row[3],
+        "title": row[4], "body": row[5], "delivered": bool(row[6]), "read_at": row[7],
+    }
+
+
+def get_alerts(unread_only=False, limit=20):
+    conn = db_conn()
+    where = "WHERE read_at IS NULL" if unread_only else ""
+    sql = (
+        "SELECT " + _ALERT_LOG_COLS + " FROM budget_alert_log " + where +
+        " ORDER BY sent_at DESC, id DESC LIMIT ?"
+    )
+    rows = conn.execute(sql, (limit,)).fetchall()
+    unread = conn.execute("SELECT COUNT(*) FROM budget_alert_log WHERE read_at IS NULL").fetchone()[0]
+    conn.close()
+    return [_alert_row(r) for r in rows], unread
+
+
+def mark_alert_read(alert_id):
+    conn = db_conn()
+    conn.execute(
+        "UPDATE budget_alert_log SET read_at = ? WHERE id = ? AND read_at IS NULL",
+        (str(now_jkt()), alert_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 # ================================================================
 # GOALS — sinking funds / savings targets. reserve_from_free drives
 # whether service.goal_reservations() folds this goal into
