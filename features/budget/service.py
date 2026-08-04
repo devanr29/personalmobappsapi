@@ -6,6 +6,7 @@ import datetime
 
 from config import PAYROLL_DAY, now_jkt
 from database import state_get, state_set
+from db import db_conn
 from features.budget import repo, insights
 from features.budget.compute import compute_budget_by_id
 from features.budget.errors import BudgetConflict, BudgetNotFound, BudgetValidationError
@@ -30,48 +31,59 @@ def build_period_view():
     """Returns the full compute_budget_by_id() dict for the current
     period, plus a period_id key, or None if the feature hasn't been set
     up yet (no wallets configured) — mirrors the legacy "never computed"
-    null state."""
-    wallets = repo.get_wallets()
-    if not wallets:
-        return None
+    null state.
 
-    period = ensure_current_period(get_payroll_day())
-    now = now_jkt().date()
-    end = datetime.date.fromisoformat(period["end_date"])
-    days_left = max((end - now).days, 0)
+    Opens a single connection and threads it through every repo call
+    below instead of letting each one open its own (repo.py's default):
+    this is the GET /api/home and GET /api/budget hot path, and against
+    a remote DB each extra db_conn() round-trip is real, measurable
+    latency — 10 separate connections vs. 1 was the difference between
+    this endpoint timing out on the mobile app and returning promptly."""
+    conn = db_conn()
+    try:
+        wallets = repo.get_wallets(conn=conn)
+        if not wallets:
+            return None
 
-    bills = repo.get_bills()
-    paid_bill_ids = repo.get_paid_bill_ids(period["id"])
+        period = ensure_current_period(get_payroll_day(), conn=conn)
+        now = now_jkt().date()
+        end = datetime.date.fromisoformat(period["end_date"])
+        days_left = max((end - now).days, 0)
 
-    variable = repo.get_categories(kind="variable")
-    variable_ids = {c["id"] for c in variable}
-    categories = [{"id": c["id"], "name": c["name"], "budget": c["monthly_limit"] or 0} for c in variable]
-    spend_rows = repo.spend_by_category_for_period(period["id"])
-    spend_by_category_id = {r["category_id"]: r["spend"] for r in spend_rows}
+        bills = repo.get_bills(conn=conn)
+        paid_bill_ids = repo.get_paid_bill_ids(period["id"], conn=conn)
 
-    # Spend against a category_id that isn't a tracked variable budget —
-    # either uncategorized (category_id is None) or a 'fixed'-kind
-    # category — surfaced the same way the name-matched path surfaced a
-    # spend key with no matching budget line: visible, but excluded from
-    # total_deductions (money_in_hand() already nets it out).
-    unmatched_spending = [
-        {"name": r["category_name"] or "Uncategorized", "amount": r["spend"]}
-        for r in spend_rows
-        if r["category_id"] not in variable_ids and r["spend"] > 0
-    ]
+        variable = repo.get_categories(kind="variable", conn=conn)
+        variable_ids = {c["id"] for c in variable}
+        categories = [{"id": c["id"], "name": c["name"], "budget": c["monthly_limit"] or 0} for c in variable]
+        spend_rows = repo.spend_by_category_for_period(period["id"], conn=conn)
+        spend_by_category_id = {r["category_id"]: r["spend"] for r in spend_rows}
 
-    data = compute_budget_by_id(
-        days_left=days_left,
-        remaining_money=repo.money_in_hand(),
-        bills=[{"id": b["id"], "name": b["name"], "amount": b["amount"], "due_day": b["due_day"]} for b in bills],
-        categories=categories,
-        paid_bill_ids=paid_bill_ids,
-        spend_by_category_id=spend_by_category_id,
-        unmatched_spending=unmatched_spending,
-        goal_reservations=goal_reservations(period),
-    )
-    data["period_id"] = period["id"]
-    return data
+        # Spend against a category_id that isn't a tracked variable budget —
+        # either uncategorized (category_id is None) or a 'fixed'-kind
+        # category — surfaced the same way the name-matched path surfaced a
+        # spend key with no matching budget line: visible, but excluded from
+        # total_deductions (money_in_hand() already nets it out).
+        unmatched_spending = [
+            {"name": r["category_name"] or "Uncategorized", "amount": r["spend"]}
+            for r in spend_rows
+            if r["category_id"] not in variable_ids and r["spend"] > 0
+        ]
+
+        data = compute_budget_by_id(
+            days_left=days_left,
+            remaining_money=repo.money_in_hand(conn=conn, wallets=wallets),
+            bills=[{"id": b["id"], "name": b["name"], "amount": b["amount"], "due_day": b["due_day"]} for b in bills],
+            categories=categories,
+            paid_bill_ids=paid_bill_ids,
+            spend_by_category_id=spend_by_category_id,
+            unmatched_spending=unmatched_spending,
+            goal_reservations=goal_reservations(period, conn=conn),
+        )
+        data["period_id"] = period["id"]
+        return data
+    finally:
+        conn.close()
 
 
 def _months_between(from_date: datetime.date, to_date: datetime.date) -> int:
@@ -82,7 +94,7 @@ def _months_between(from_date: datetime.date, to_date: datetime.date) -> int:
     return max(months, 1)
 
 
-def goal_reservations(period) -> list:
+def goal_reservations(period, conn=None) -> list:
     """One reservation per active goal with reserve_from_free=1, net of
     what's already been contributed THIS period — a contribution already
     moved money out of the spendable wallets (if the goal has one), so
@@ -92,18 +104,18 @@ def goal_reservations(period) -> list:
     change for ledgers with no goals."""
     out = []
     today = now_jkt().date()
-    for g in repo.get_goals(include_archived=False):
+    for g in repo.get_goals(include_archived=False, conn=conn):
         if not g["reserve_from_free"]:
             continue
         monthly = g["monthly_contribution"]
         if monthly is None:
             if not g["target_date"]:
                 continue
-            remaining_target = max(g["target_amount"] - repo.goal_saved(g["id"]), 0)
+            remaining_target = max(g["target_amount"] - repo.goal_saved(g["id"], conn=conn), 0)
             target_date = datetime.date.fromisoformat(g["target_date"])
             months = _months_between(today, target_date)
             monthly = -(-remaining_target // months)  # ceil division
-        already = repo.goal_contributed_in_period(g["id"], period["start_date"], period["end_date"])
+        already = repo.goal_contributed_in_period(g["id"], period["start_date"], period["end_date"], conn=conn)
         amount = max(monthly - already, 0)
         if amount > 0:
             out.append({"name": g["name"], "amount": amount})

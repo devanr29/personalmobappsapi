@@ -4,7 +4,7 @@ inherit from api_bp, so auth/CORS/error-mapping are wired independently
 here via the shared functions in api_common.py."""
 from flask import Blueprint, request
 
-from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_error
+from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_error, start_timer, log_timing
 from features.budget import repo, service
 from features.budget.errors import BudgetError
 from features.budget.serializers import (
@@ -13,6 +13,16 @@ from features.budget.serializers import (
 )
 
 budget_bp = Blueprint("budget", __name__)
+
+
+@budget_bp.before_request
+def _start_timer():
+    start_timer()
+
+
+@budget_bp.after_request
+def _log_timing(resp):
+    return log_timing(resp)
 
 
 @budget_bp.after_request

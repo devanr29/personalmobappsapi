@@ -47,13 +47,19 @@ def period_bounds(now: datetime.date, payroll_day: int) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def ensure_current_period(payroll_day: int, expected_income: int = 0):
+def ensure_current_period(payroll_day: int, expected_income: int = 0, conn=None):
     """Fetch the budget_periods row covering today, creating it if absent.
-    Returns a dict of the row."""
+    Returns a dict of the row. Accepts a caller-owned `conn` so callers
+    that need this alongside several other budget reads (build_period_view)
+    can share one connection instead of paying a separate round-trip
+    per lookup — see repo.py's module docstring for why that matters
+    against a remote DB."""
     now = now_jkt().date()
     start_date, end_date = period_bounds(now, payroll_day)
 
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     row = conn.execute(
         "SELECT id, start_date, end_date, payroll_day, expected_income, opening_balance, closed_at "
         "FROM budget_periods WHERE start_date = ?",
@@ -72,7 +78,8 @@ def ensure_current_period(payroll_day: int, expected_income: int = 0):
             "FROM budget_periods WHERE start_date = ?",
             (start_date,),
         ).fetchone()
-    conn.close()
+    if owns_conn:
+        conn.close()
 
     return {
         "id": row[0],

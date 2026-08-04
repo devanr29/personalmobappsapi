@@ -47,12 +47,15 @@ def create_wallet(name, kind="cash", opening_balance=0, spendable=True, is_defau
     return get_wallet(wallet_id)
 
 
-def get_wallets(include_archived=False):
-    conn = db_conn()
+def get_wallets(include_archived=False, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     where = "" if include_archived else "WHERE archived = 0"
     sql = "SELECT " + _WALLET_COLS + " FROM budget_wallets " + where + " ORDER BY sort_order, id"
     rows = conn.execute(sql).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [_wallet_row(r) for r in rows]
 
 
@@ -127,14 +130,16 @@ def delete_wallet(wallet_id):
     conn.close()
 
 
-def wallet_balances() -> dict:
+def wallet_balances(conn=None) -> dict:
     """{wallet_id: balance} for every wallet (including archived — callers
     filter as needed) in 3 queries total, instead of 4 per wallet.
 
     'adjustment' is signed and applies at face value (positive tops up a
     wallet, negative reduces it — reconcile.py's contract); 'transfer'
     leaves wallet_id (debited) and lands in transfer_wallet_id (credited)."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     wallets = conn.execute("SELECT id, opening_balance FROM budget_wallets").fetchall()
     out = {row[0]: _int0(row[1]) for row in wallets}
 
@@ -160,7 +165,8 @@ def wallet_balances() -> dict:
         if wallet_id in out:
             out[wallet_id] += _int0(delta)
 
-    conn.close()
+    if owns_conn:
+        conn.close()
     return out
 
 
@@ -168,14 +174,20 @@ def wallet_balance(wallet_id) -> int:
     return wallet_balances().get(wallet_id, 0)
 
 
-def money_in_hand() -> int:
-    """Sum of every spendable, non-archived wallet's balance."""
-    balances = wallet_balances()
-    return sum(
-        balances.get(w["id"], 0)
-        for w in get_wallets(include_archived=False)
-        if w["spendable"]
-    )
+def money_in_hand(conn=None, wallets=None) -> int:
+    """Sum of every spendable, non-archived wallet's balance. Pass
+    `wallets` when the caller already fetched the non-archived list (e.g.
+    build_period_view() needs it anyway to check the "not set up" case) —
+    skips a redundant identical query."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    balances = wallet_balances(conn=conn)
+    if wallets is None:
+        wallets = get_wallets(include_archived=False, conn=conn)
+    if owns_conn:
+        conn.close()
+    return sum(balances.get(w["id"], 0) for w in wallets if w["spendable"])
 
 
 # ================================================================
@@ -208,8 +220,10 @@ def create_category(name, kind, monthly_limit=None, rollover=False, keywords=Non
     return get_category(category_id)
 
 
-def get_categories(include_archived=False, kind=None):
-    conn = db_conn()
+def get_categories(include_archived=False, kind=None, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     clauses = [] if include_archived else ["archived = 0"]
     params = []
     if kind:
@@ -218,7 +232,8 @@ def get_categories(include_archived=False, kind=None):
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = "SELECT " + _CATEGORY_COLS + " FROM budget_categories " + where + " ORDER BY sort_order, id"
     rows = conn.execute(sql, params).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [_category_row(r) for r in rows]
 
 
@@ -290,14 +305,16 @@ def spend_by_category(category_id, period_id) -> int:
     return _int0(row[0])
 
 
-def spend_by_category_for_period(period_id) -> list:
+def spend_by_category_for_period(period_id, conn=None) -> list:
     """One query for every category's spend this period, in id-grouped
     rows — replaces the N-query per-category loop build_period_view() used
     to run. t.category_id IS NULL groups into a single row (the
     "uncategorized" bucket), which callers must not filter out. Every
     selected non-aggregate column is in GROUP BY — Postgres requires it,
     SQLite doesn't enforce it but accepts it identically."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     rows = conn.execute(
         "SELECT t.category_id, c.name, COALESCE(SUM(t.amount), 0) "
         "FROM budget_transactions t "
@@ -306,7 +323,8 @@ def spend_by_category_for_period(period_id) -> list:
         "GROUP BY t.category_id, c.name",
         (period_id,),
     ).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [{"category_id": r[0], "category_name": r[1], "spend": _int0(r[2])} for r in rows]
 
 
@@ -324,12 +342,15 @@ def _bill_row(row):
     }
 
 
-def get_bills(active_only=True):
-    conn = db_conn()
+def get_bills(active_only=True, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     where = "WHERE active = 1" if active_only else ""
     sql = "SELECT " + _BILL_COLS + " FROM budget_bills " + where + " ORDER BY id"
     rows = conn.execute(sql).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [_bill_row(r) for r in rows]
 
 
@@ -399,12 +420,15 @@ def delete_bill(bill_id):
     conn.close()
 
 
-def get_paid_bill_ids(period_id) -> set:
-    conn = db_conn()
+def get_paid_bill_ids(period_id, conn=None) -> set:
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     rows = conn.execute(
         "SELECT bill_id FROM budget_bill_payments WHERE period_id = ?", (period_id,)
     ).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return {r[0] for r in rows}
 
 
@@ -615,12 +639,15 @@ def create_goal(name, target_amount, kind="sinking", target_date=None,
     return get_goal(goal_id)
 
 
-def get_goals(include_archived=False):
-    conn = db_conn()
+def get_goals(include_archived=False, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     where = "" if include_archived else "WHERE archived = 0"
     sql = "SELECT " + _GOAL_COLS + " FROM budget_goals " + where + " ORDER BY id"
     rows = conn.execute(sql).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [_goal_row(r) for r in rows]
 
 
@@ -677,28 +704,34 @@ def delete_goal(goal_id):
     conn.close()
 
 
-def goal_saved(goal_id) -> int:
+def goal_saved(goal_id, conn=None) -> int:
     """Total ever contributed to this goal, all-time."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     row = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM budget_goal_contributions WHERE goal_id = ?", (goal_id,)
     ).fetchone()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return _int0(row[0])
 
 
-def goal_contributed_in_period(goal_id, start_date, end_date) -> int:
+def goal_contributed_in_period(goal_id, start_date, end_date, conn=None) -> int:
     """Contributed within [start_date, end_date) — same half-open
     convention as a budget period. occurred_at is TEXT; comparing against
     a 10-char date bound works the same way date_from/date_to do
     elsewhere (a bare date sorts before any same-day timestamp)."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     row = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM budget_goal_contributions "
         "WHERE goal_id = ? AND occurred_at >= ? AND occurred_at < ?",
         (goal_id, start_date, end_date),
     ).fetchone()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return _int0(row[0])
 
 

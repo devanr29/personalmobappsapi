@@ -26,9 +26,19 @@ from ai.brainstorm import ai_brainstorm
 from features.memory import semantic_search
 from push import register_push_token
 from tracer import logger
-from api_common import ok as _ok, err as _err, add_cors_headers as _add_cors_headers, check_auth as _http_check_auth, handle_unexpected_error as _http_handle_unexpected_error
+from api_common import ok as _ok, err as _err, add_cors_headers as _add_cors_headers, check_auth as _http_check_auth, handle_unexpected_error as _http_handle_unexpected_error, start_timer as _http_start_timer, log_timing as _http_log_timing
 
 api_bp = Blueprint("api", __name__)
+
+
+@api_bp.before_request
+def _start_timer():
+    _http_start_timer()
+
+
+@api_bp.after_request
+def _log_timing(resp):
+    return _http_log_timing(resp)
 
 
 @api_bp.after_request

@@ -13,6 +13,18 @@ IS_PG = bool(DATABASE_URL)
 
 if IS_PG:
     import psycopg2
+    from psycopg2.pool import ThreadedConnectionPool
+
+    # Every repo.py function opens-and-closes its own connection (by
+    # design — see repo.py's docstring), and a single aggregate read like
+    # GET /api/home or /api/budget fans out into 8-10 of them. Against a
+    # remote Postgres host each fresh TCP+TLS handshake costs ~2-3s on
+    # this network, so those endpoints were taking 20-30s (observed
+    # hanging/timing out on the mobile app) even though every individual
+    # query itself is trivial. Pooling reuses warm connections so repeat
+    # db_conn() calls in the same process pay the handshake once, not
+    # per-call.
+    _pg_pool = ThreadedConnectionPool(1, 10, DATABASE_URL)
 
 
 def q(sql: str) -> str:
@@ -57,7 +69,25 @@ class _PGConn:
         self._conn.rollback()
 
     def close(self):
-        self._conn.close()
+        """Returns the connection to the pool instead of closing the
+        socket. A caller that hit an exception between db_conn() and
+        close() (most repo.py functions have no try/finally — an
+        INTEGRITY_ERROR mid-transaction is the realistic case) can leave
+        the session in an aborted-transaction state; putconn() alone
+        doesn't clear that, so the next borrower's first query would fail
+        with 'current transaction is aborted'. Roll back first whenever
+        the connection isn't idle. If the connection itself is broken,
+        drop it from the pool entirely rather than recycling a dead
+        socket."""
+        try:
+            if self._conn.closed:
+                _pg_pool.putconn(self._conn, close=True)
+                return
+            if self._conn.get_transaction_status() != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+                self._conn.rollback()
+            _pg_pool.putconn(self._conn)
+        except Exception:
+            _pg_pool.putconn(self._conn, close=True)
 
 
 def _pg_lastrowid(cur, sql):
@@ -102,7 +132,7 @@ def integrity_errors():
 def db_conn():
     """Return a connection: Postgres when DATABASE_URL is set, else SQLite."""
     if IS_PG:
-        return _PGConn(psycopg2.connect(DATABASE_URL))
+        return _PGConn(_pg_pool.getconn())
     conn = sqlite3.connect(DB_PATH)
     # ON DELETE SET NULL / CASCADE (used by the budget schema's foreign
     # keys) are silently inert on SQLite unless this is set per-connection.
