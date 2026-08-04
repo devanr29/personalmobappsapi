@@ -82,7 +82,7 @@ def seed_from_sheets(force: bool = False) -> dict:
         )
 
     period = ensure_current_period(PAYROLL_DAY)
-    _ensure_alert_prefs_row()
+    repo.ensure_alert_prefs()
 
     state_set("budget_seeded_at", str(now_jkt()))
 
@@ -93,16 +93,3 @@ def seed_from_sheets(force: bool = False) -> dict:
         "periodId": period["id"],
         "openingBalance": opening_balance,
     }
-
-
-def _ensure_alert_prefs_row():
-    from db import db_conn, IS_PG
-    insert_sql = (
-        "INSERT INTO budget_alert_prefs (id, updated_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING"
-        if IS_PG else
-        "INSERT OR IGNORE INTO budget_alert_prefs (id, updated_at) VALUES (1, ?)"
-    )
-    conn = db_conn()
-    conn.execute(insert_sql, (str(now_jkt()),))
-    conn.commit()
-    conn.close()

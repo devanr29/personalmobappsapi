@@ -99,13 +99,25 @@ def update_wallet(wallet_id, **fields):
 
 
 def wallet_in_use(wallet_id) -> bool:
+    """Transactions, bills, or goals referencing this wallet. All three FKs
+    are ON DELETE SET NULL, so a hard delete_wallet() call would silently
+    orphan those rows instead of failing — this guard is the only thing
+    standing between a mistap and unrecoverable balance corruption (the
+    money in a deleted wallet's transactions just vanishes from
+    money_in_hand(), since balances are summed per-wallet)."""
     conn = db_conn()
-    row = conn.execute(
+    in_txns = conn.execute(
         "SELECT 1 FROM budget_transactions WHERE (wallet_id = ? OR transfer_wallet_id = ?) AND deleted_at IS NULL LIMIT 1",
         (wallet_id, wallet_id),
     ).fetchone()
+    in_bills = conn.execute(
+        "SELECT 1 FROM budget_bills WHERE wallet_id = ? LIMIT 1", (wallet_id,)
+    ).fetchone()
+    in_goals = conn.execute(
+        "SELECT 1 FROM budget_goals WHERE wallet_id = ? LIMIT 1", (wallet_id,)
+    ).fetchone()
     conn.close()
-    return row is not None
+    return in_txns is not None or in_bills is not None or in_goals is not None
 
 
 def delete_wallet(wallet_id):
@@ -249,12 +261,15 @@ def update_category(category_id, **fields):
 
 def category_in_use(category_id) -> bool:
     conn = db_conn()
-    row = conn.execute(
+    in_txns = conn.execute(
         "SELECT 1 FROM budget_transactions WHERE category_id = ? AND deleted_at IS NULL LIMIT 1",
         (category_id,),
     ).fetchone()
+    in_bills = conn.execute(
+        "SELECT 1 FROM budget_bills WHERE category_id = ? LIMIT 1", (category_id,)
+    ).fetchone()
     conn.close()
-    return row is not None
+    return in_txns is not None or in_bills is not None
 
 
 def delete_category(category_id):
@@ -296,9 +311,7 @@ def spend_by_category_for_period(period_id) -> list:
 
 
 # ================================================================
-# BILLS — read-only accessors for now; full CRUD (create/update/delete/
-# pay/unpay) is Phase 2 work. Needed here because build_period_view()
-# must know which fixed expenses exist and which are already paid.
+# BILLS
 # ================================================================
 _BILL_COLS = "id, name, amount, due_day, cadence, category_id, wallet_id, autopost, active, created_at"
 
@@ -328,17 +341,62 @@ def get_bill(bill_id):
     return _bill_row(row) if row else None
 
 
-def create_bill(name, amount, due_day=None, category_id=None, wallet_id=None, cadence="monthly"):
+def create_bill(name, amount, due_day=None, category_id=None, wallet_id=None, cadence="monthly", autopost=False):
     conn = db_conn()
     cur = conn.execute(
-        "INSERT INTO budget_bills (name, amount, due_day, cadence, category_id, wallet_id, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, amount, due_day, cadence, category_id, wallet_id, str(now_jkt())),
+        "INSERT INTO budget_bills (name, amount, due_day, cadence, category_id, wallet_id, autopost, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, amount, due_day, cadence, category_id, wallet_id, int(autopost), str(now_jkt())),
     )
     bill_id = cur.lastrowid
     conn.commit()
     conn.close()
     return get_bill(bill_id)
+
+
+_BILL_UPDATABLE = {"name", "amount", "due_day", "cadence", "category_id", "wallet_id", "autopost", "active"}
+_BILL_BOOL_FIELDS = {"autopost", "active"}
+
+
+def update_bill(bill_id, **fields):
+    if not fields:
+        return get_bill(bill_id)
+    sets, params = [], []
+    for key, value in fields.items():
+        if key not in _BILL_UPDATABLE:
+            continue
+        if key in _BILL_BOOL_FIELDS:
+            value = int(value)
+        sets.append(key + " = ?")
+        params.append(value)
+    if not sets:
+        return get_bill(bill_id)
+    params.append(bill_id)
+    conn = db_conn()
+    sql = "UPDATE budget_bills SET " + ", ".join(sets) + " WHERE id = ?"
+    conn.execute(sql, params)
+    conn.commit()
+    conn.close()
+    return get_bill(bill_id)
+
+
+def bill_in_use(bill_id) -> bool:
+    conn = db_conn()
+    in_payments = conn.execute(
+        "SELECT 1 FROM budget_bill_payments WHERE bill_id = ? LIMIT 1", (bill_id,)
+    ).fetchone()
+    in_txns = conn.execute(
+        "SELECT 1 FROM budget_transactions WHERE bill_id = ? AND deleted_at IS NULL LIMIT 1", (bill_id,)
+    ).fetchone()
+    conn.close()
+    return in_payments is not None or in_txns is not None
+
+
+def delete_bill(bill_id):
+    conn = db_conn()
+    conn.execute("DELETE FROM budget_bills WHERE id = ?", (bill_id,))
+    conn.commit()
+    conn.close()
 
 
 def get_paid_bill_ids(period_id) -> set:
@@ -348,6 +406,68 @@ def get_paid_bill_ids(period_id) -> set:
     ).fetchall()
     conn.close()
     return {r[0] for r in rows}
+
+
+def create_bill_payment(bill_id, period_id, transaction_id, paid_at):
+    """UNIQUE(bill_id, period_id) is service.pay_bill()'s real concurrency
+    guard against double-paying a bill in one period — a pre-check SELECT
+    would only narrow the race, not close it. On a violation the INSERT
+    raises before conn.commit(); this still must roll back and close the
+    connection explicitly (rather than leaving it to fall out of scope),
+    or on Postgres the failed statement leaves an uncommitted transaction
+    open on that connection until the server eventually reclaims it."""
+    conn = db_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO budget_bill_payments (bill_id, period_id, transaction_id, paid_at) VALUES (?, ?, ?, ?)",
+            (bill_id, period_id, transaction_id, paid_at),
+        )
+        payment_id = cur.lastrowid
+        conn.commit()
+        return payment_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_bill_payment(bill_id, period_id):
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT id, bill_id, period_id, transaction_id, paid_at FROM budget_bill_payments "
+        "WHERE bill_id = ? AND period_id = ?",
+        (bill_id, period_id),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {"id": row[0], "bill_id": row[1], "period_id": row[2], "transaction_id": row[3], "paid_at": row[4]}
+
+
+def delete_bill_payment(bill_id, period_id):
+    conn = db_conn()
+    conn.execute(
+        "DELETE FROM budget_bill_payments WHERE bill_id = ? AND period_id = ?", (bill_id, period_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def ensure_alert_prefs():
+    """Idempotent insert of the singleton alert-prefs row. Shared by the
+    Sheets seed and the setup wizard — both need the row to exist before
+    GET/PATCH /budget/alerts/prefs works."""
+    from db import IS_PG
+    insert_sql = (
+        "INSERT INTO budget_alert_prefs (id, updated_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING"
+        if IS_PG else
+        "INSERT OR IGNORE INTO budget_alert_prefs (id, updated_at) VALUES (1, ?)"
+    )
+    conn = db_conn()
+    conn.execute(insert_sql, (str(now_jkt()),))
+    conn.commit()
+    conn.close()
 
 
 # ================================================================

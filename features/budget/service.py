@@ -4,10 +4,25 @@ concerns — those live in blueprint.py."""
 import datetime
 
 from config import PAYROLL_DAY, now_jkt
+from database import state_get, state_set
 from features.budget import repo
 from features.budget.compute import compute_budget_by_id
-from features.budget.errors import BudgetNotFound, BudgetValidationError
+from features.budget.errors import BudgetConflict, BudgetNotFound, BudgetValidationError
 from features.budget.periods import ensure_current_period
+
+
+def get_payroll_day() -> int:
+    """config.PAYROLL_DAY is a constant; the setup wizard needs the pay
+    cycle to be user-editable at runtime, so an explicit override in
+    bot_state wins when present."""
+    stored = state_get("payroll_day")
+    return int(stored) if stored else PAYROLL_DAY
+
+
+def set_payroll_day(day: int):
+    if not isinstance(day, int) or not (1 <= day <= 31):
+        raise BudgetValidationError("payrollDay must be an integer between 1 and 31.")
+    state_set("payroll_day", str(day))
 
 
 def build_period_view():
@@ -19,7 +34,7 @@ def build_period_view():
     if not wallets:
         return None
 
-    period = ensure_current_period(PAYROLL_DAY)
+    period = ensure_current_period(get_payroll_day())
     now = now_jkt().date()
     end = datetime.date.fromisoformat(period["end_date"])
     days_left = max((end - now).days, 0)
@@ -85,6 +100,11 @@ def get_summary():
 # separate round-trip to GET /api/budget.
 # ================================================================
 _VALID_DIRECTIONS = {"expense", "income", "transfer", "adjustment"}
+# 'adjustment' is the one direction that can be negative — a reconcile that
+# lowers a wallet's balance needs a negative delta. Every other direction's
+# sign is implied by its name, so a negative expense/income/transfer would
+# just be a confusing way to write the opposite direction.
+_SIGNED_DIRECTIONS = {"adjustment"}
 
 
 def _normalize_occurred_at(value):
@@ -117,13 +137,15 @@ def create_transaction(
     amount, direction, category_id=None, wallet_id=None, transfer_wallet_id=None,
     note=None, source="manual", raw_input=None, occurred_at=None, goal_id=None,
 ):
-    if not isinstance(amount, (int, float)) or amount <= 0:
-        raise BudgetValidationError("amount must be a positive number.")
     if direction not in _VALID_DIRECTIONS:
         raise BudgetValidationError(f"direction must be one of {sorted(_VALID_DIRECTIONS)}.")
+    if not isinstance(amount, (int, float)) or amount == 0:
+        raise BudgetValidationError("amount must be a non-zero number.")
+    if direction not in _SIGNED_DIRECTIONS and amount < 0:
+        raise BudgetValidationError(f"amount must be positive for direction={direction}.")
     _validate_refs(category_id, wallet_id, transfer_wallet_id)
 
-    period = ensure_current_period(PAYROLL_DAY)
+    period = ensure_current_period(get_payroll_day())
     txn = repo.create_transaction(
         amount=int(amount), direction=direction, category_id=category_id,
         wallet_id=wallet_id, transfer_wallet_id=transfer_wallet_id,
@@ -163,3 +185,272 @@ def list_transactions(**filters):
     if date_to and len(date_to) == 10:
         filters["date_to"] = date_to + " 23:59:59"
     return repo.get_transactions(**filters)
+
+
+# ================================================================
+# CATEGORIES
+# ================================================================
+_VALID_CATEGORY_KINDS = {"fixed", "variable"}
+
+
+def create_category(name, kind, monthly_limit=None, rollover=False, icon=None, color_index=None):
+    if not name or not name.strip():
+        raise BudgetValidationError("name is required.")
+    if kind not in _VALID_CATEGORY_KINDS:
+        raise BudgetValidationError(f"kind must be one of {sorted(_VALID_CATEGORY_KINDS)}.")
+    return repo.create_category(
+        name.strip(), kind, monthly_limit=monthly_limit, rollover=rollover, icon=icon, color_index=color_index,
+    )
+
+
+def update_category(category_id, **fields):
+    if repo.get_category(category_id) is None:
+        raise BudgetNotFound(f"No category with id {category_id}.")
+    if "kind" in fields and fields["kind"] not in _VALID_CATEGORY_KINDS:
+        raise BudgetValidationError(f"kind must be one of {sorted(_VALID_CATEGORY_KINDS)}.")
+    return repo.update_category(category_id, **fields)
+
+
+def delete_category(category_id):
+    if repo.get_category(category_id) is None:
+        raise BudgetNotFound(f"No category with id {category_id}.")
+    if repo.category_in_use(category_id):
+        raise BudgetConflict("This category has transactions or bills — archive it instead of deleting it.")
+    repo.delete_category(category_id)
+
+
+# ================================================================
+# WALLETS — CRUD, transfer between wallets, reconcile to an actual balance
+# ================================================================
+def create_wallet(name, kind="cash", opening_balance=0, spendable=True, is_default=False):
+    if not name or not name.strip():
+        raise BudgetValidationError("name is required.")
+    return repo.create_wallet(
+        name.strip(), kind=kind, opening_balance=opening_balance, spendable=spendable, is_default=is_default,
+    )
+
+
+def update_wallet(wallet_id, **fields):
+    if repo.get_wallet(wallet_id) is None:
+        raise BudgetNotFound(f"No wallet with id {wallet_id}.")
+    return repo.update_wallet(wallet_id, **fields)
+
+
+def delete_wallet(wallet_id):
+    if repo.get_wallet(wallet_id) is None:
+        raise BudgetNotFound(f"No wallet with id {wallet_id}.")
+    if repo.wallet_in_use(wallet_id):
+        raise BudgetConflict("This wallet has transactions, bills, or goals — archive it instead of deleting it.")
+    repo.delete_wallet(wallet_id)
+
+
+def transfer_between_wallets(from_wallet_id, to_wallet_id, amount, occurred_at=None, note=None):
+    if from_wallet_id == to_wallet_id:
+        raise BudgetValidationError("fromWalletId and toWalletId must be different wallets.")
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise BudgetValidationError("amount must be a positive number.")
+    from_wallet = repo.get_wallet(from_wallet_id)
+    to_wallet = repo.get_wallet(to_wallet_id)
+    if from_wallet is None:
+        raise BudgetValidationError(f"Unknown fromWalletId {from_wallet_id}.")
+    if to_wallet is None:
+        raise BudgetValidationError(f"Unknown toWalletId {to_wallet_id}.")
+    if from_wallet["archived"] or to_wallet["archived"]:
+        raise BudgetValidationError("Cannot transfer to or from an archived wallet.")
+
+    period = ensure_current_period(get_payroll_day())
+    txn = repo.create_transaction(
+        amount=int(amount), direction="transfer", wallet_id=from_wallet_id,
+        transfer_wallet_id=to_wallet_id, period_id=period["id"], note=note, source="manual",
+        occurred_at=_normalize_occurred_at(occurred_at),
+    )
+    return txn, get_summary()
+
+
+def reconcile_wallet(wallet_id, actual_balance, note=None):
+    if repo.get_wallet(wallet_id) is None:
+        raise BudgetNotFound(f"No wallet with id {wallet_id}.")
+    if not isinstance(actual_balance, (int, float)):
+        raise BudgetValidationError("actualBalance must be a number.")
+
+    current = repo.wallet_balance(wallet_id)
+    delta = int(actual_balance) - current
+    if delta == 0:
+        return {"adjusted": False, "delta": 0}, get_summary()
+
+    period = ensure_current_period(get_payroll_day())
+    txn = repo.create_transaction(
+        amount=delta, direction="adjustment", wallet_id=wallet_id, period_id=period["id"],
+        note=note or f"Reconciled to {int(actual_balance)}", source="reconcile",
+    )
+    return {"adjusted": True, "delta": delta, "transaction": txn}, get_summary()
+
+
+# ================================================================
+# BILLS
+# ================================================================
+def create_bill(name, amount, due_day=None, category_id=None, wallet_id=None, cadence="monthly", autopost=False):
+    if not name or not name.strip():
+        raise BudgetValidationError("name is required.")
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise BudgetValidationError("amount must be a positive number.")
+    _validate_refs(category_id, wallet_id)
+    return repo.create_bill(
+        name.strip(), int(amount), due_day=due_day, category_id=category_id,
+        wallet_id=wallet_id, cadence=cadence, autopost=autopost,
+    )
+
+
+def update_bill(bill_id, **fields):
+    if repo.get_bill(bill_id) is None:
+        raise BudgetNotFound(f"No bill with id {bill_id}.")
+    _validate_refs(fields.get("category_id"), fields.get("wallet_id"))
+    return repo.update_bill(bill_id, **fields)
+
+
+def delete_bill(bill_id):
+    if repo.get_bill(bill_id) is None:
+        raise BudgetNotFound(f"No bill with id {bill_id}.")
+    if repo.bill_in_use(bill_id):
+        raise BudgetConflict("This bill has payment history — deactivate it instead of deleting it.")
+    repo.delete_bill(bill_id)
+
+
+def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None):
+    from db import integrity_errors
+
+    bill = repo.get_bill(bill_id)
+    if bill is None:
+        raise BudgetNotFound(f"No bill with id {bill_id}.")
+    if not bill["active"]:
+        raise BudgetValidationError("This bill is not active.")
+
+    period = ensure_current_period(get_payroll_day())
+    resolved_wallet_id = wallet_id or bill["wallet_id"]
+    if resolved_wallet_id is None:
+        default_wallet = repo.get_default_wallet()
+        resolved_wallet_id = default_wallet["id"] if default_wallet else None
+    _validate_refs(bill["category_id"], resolved_wallet_id)
+
+    txn = repo.create_transaction(
+        amount=int(amount) if amount is not None else bill["amount"],
+        direction="expense", category_id=bill["category_id"], wallet_id=resolved_wallet_id,
+        period_id=period["id"], bill_id=bill["id"], note=bill["name"], source="bill",
+        occurred_at=_normalize_occurred_at(occurred_at),
+    )
+
+    try:
+        repo.create_bill_payment(bill["id"], period["id"], txn["id"], str(now_jkt()))
+    except integrity_errors():
+        # repo.create_bill_payment() already rolled back and closed its own
+        # (now-failed) connection — soft_delete_transaction() below opens a
+        # fresh one, so there's no poisoned state to carry over here.
+        repo.soft_delete_transaction(txn["id"])
+        raise BudgetConflict(f"Bill {bill['name']} is already marked paid for this period.")
+
+    return txn, get_summary()
+
+
+def unpay_bill(bill_id):
+    bill = repo.get_bill(bill_id)
+    if bill is None:
+        raise BudgetNotFound(f"No bill with id {bill_id}.")
+
+    period = ensure_current_period(get_payroll_day())
+    payment = repo.get_bill_payment(bill_id, period["id"])
+    if payment is None:
+        raise BudgetNotFound(f"Bill {bill['name']} is not marked paid for this period.")
+
+    if payment["transaction_id"] is not None:
+        repo.soft_delete_transaction(payment["transaction_id"])
+    repo.delete_bill_payment(bill_id, period["id"])
+    return bill, get_summary()
+
+
+# ================================================================
+# SETUP WIZARD — replaces the Sheets import as the first-run path.
+# Idempotent find-or-create rather than one transaction: repo functions
+# each open their own connection, so a mid-wizard failure should leave
+# state that a retry can pick up from cleanly, not a half-applied write.
+# ================================================================
+def get_setup_status():
+    wallets = repo.get_wallets(include_archived=True)
+    categories = repo.get_categories(include_archived=True)
+    bills = repo.get_bills(active_only=False)
+    return {
+        "seeded": bool(state_get("budget_seeded_at")),
+        "wallet_count": len(wallets),
+        "category_count": len(categories),
+        "bill_count": len(bills),
+    }
+
+
+def _find_by_name(items, name):
+    for item in items:
+        if item["name"] == name:
+            return item
+    return None
+
+
+def run_setup(*, payroll_day=None, wallets=None, categories=None, bills=None, force=False):
+    if state_get("budget_seeded_at") and not force:
+        raise BudgetConflict("Budget has already been set up. Pass force=true to re-run.")
+
+    wallets = wallets or []
+    categories = categories or []
+    bills = bills or []
+
+    default_flags = [bool(w.get("isDefault")) for w in wallets]
+    if wallets and default_flags.count(True) != 1:
+        raise BudgetValidationError("Exactly one wallet must be marked isDefault.")
+
+    if payroll_day is not None:
+        set_payroll_day(int(payroll_day))
+
+    existing_wallets = repo.get_wallets(include_archived=True)
+    created_wallets = []
+    for w in wallets:
+        found = _find_by_name(existing_wallets, w["name"])
+        created_wallets.append(found if found else repo.create_wallet(
+            w["name"], kind=w.get("kind", "cash"), opening_balance=w.get("openingBalance", 0),
+            spendable=w.get("spendable", True), is_default=w.get("isDefault", False),
+        ))
+
+    existing_categories = repo.get_categories(include_archived=True)
+    created_categories = []
+    for c in categories:
+        found = _find_by_name(existing_categories, c["name"])
+        created = found if found else repo.create_category(
+            c["name"], c.get("kind", "variable"), monthly_limit=c.get("monthlyLimit"),
+        )
+        created_categories.append(created)
+        existing_categories.append(created)
+
+    existing_bills = repo.get_bills(active_only=False)
+    created_bills = []
+    for b in bills:
+        category = None
+        category_name = b.get("categoryName")
+        if category_name:
+            category = _find_by_name(existing_categories, category_name)
+            if category is None:
+                category = repo.create_category(category_name, "fixed")
+                existing_categories.append(category)
+                created_categories.append(category)
+        found_bill = _find_by_name(existing_bills, b["name"])
+        created_bills.append(found_bill if found_bill else repo.create_bill(
+            b["name"], b["amount"], due_day=b.get("dueDay"),
+            category_id=category["id"] if category else None,
+        ))
+
+    period = ensure_current_period(get_payroll_day())
+    repo.ensure_alert_prefs()
+    state_set("budget_seeded_at", str(now_jkt()))
+
+    return {
+        "wallets": created_wallets,
+        "categories": created_categories,
+        "bills": created_bills,
+        "periodId": period["id"],
+        "openingBalance": next((w["opening_balance"] for w in created_wallets if w["is_default"]), 0),
+    }

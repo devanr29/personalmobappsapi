@@ -24,6 +24,7 @@ def camel_bill(b: dict) -> dict:
     return {
         "id": b["id"], "name": b["name"], "amount": b["amount"],
         "dueDay": b["due_day"], "cadence": b["cadence"], "active": b["active"],
+        "categoryId": b["category_id"], "walletId": b["wallet_id"], "autopost": b["autopost"],
     }
 
 
