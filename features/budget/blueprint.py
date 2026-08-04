@@ -69,16 +69,6 @@ def insights_history():
     return ok(service.build_insights_history(periods=periods, group_by=group_by))
 
 
-@budget_bp.route("/import/sheets", methods=["POST"])
-def import_sheets():
-    from features.budget.seed import seed_from_sheets
-
-    body = request.get_json(silent=True) or {}
-    force = bool(body.get("force") or request.args.get("force"))
-    result = seed_from_sheets(force=force)
-    return ok(camel_seed_result(result))
-
-
 # ================================================================
 # WALLETS
 # ================================================================

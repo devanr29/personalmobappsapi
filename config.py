@@ -66,19 +66,10 @@ MOBILE_API_TOKEN = os.environ.get("MOBILE_API_TOKEN", "")
 CONV_WINDOW = 10   # keep last N user+assistant pairs in context
 
 # ================================================================
-# BUDGET (personal — edit to match your own expenses)
+# BUDGET
 # ================================================================
+# Fallback pay-cycle day when bot_state["payroll_day"] hasn't been set —
+# see features/budget/service.get_payroll_day(). The setup wizard
+# (POST /api/budget/setup) is the actual source of wallets/categories/
+# bills; there are no fallback defaults for those anymore.
 PAYROLL_DAY = 25
-
-FIXED_EXPENSES = [
-    {"name": "House Rent",        "amount": 955_000,  "due_day": 25},
-    {"name": "Internet",          "amount": 150_000,  "due_day": None},
-    {"name": "Zakat",             "amount": 250_000,  "due_day": 25},
-    {"name": "House Maintenance", "amount": 600_000,  "due_day": 9},
-]
-
-VARIABLE_BUDGETS = [
-    {"name": "Ticket to go home", "budget": 600_000},
-    {"name": "Fuel",              "budget": 70_000},
-    {"name": "Laundry",           "budget": 60_000},
-]
