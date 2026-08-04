@@ -4,7 +4,7 @@ the pre-extraction _compute_budget via three unittest.mock patches. Since
 compute_budget() takes its inputs as plain arguments, there is nothing left
 to mock; the assertions below are carried over character-identical."""
 from features.budget.compute import compute_budget
-from features.budget.legacy_chat import _format_budget
+from features.budget.chat_view import format_budget_text
 
 FIXED = [
     {"name": "House Rent", "amount": 955_000, "due_day": 25},
@@ -49,7 +49,7 @@ def test_fully_spent_category_still_appears_instead_of_vanishing():
 
 def test_fully_spent_category_shown_in_formatted_output():
     data = _run()
-    text = _format_budget(data)
+    text = format_budget_text(data)
     assert "Claude" in text
     assert "not tracked" not in text.lower()
 
@@ -60,7 +60,7 @@ def test_overspent_category_flagged_not_negative():
     assert claude["remaining"] == 0
     assert claude["over_budget"] == 150_000
 
-    text = _format_budget(data)
+    text = format_budget_text(data)
     assert "over by" in text.lower()
     assert "Claude" in text
 
@@ -80,7 +80,7 @@ def test_genuinely_unmatched_category_is_surfaced_and_excluded_from_math():
     # Claude has no recorded spend this run, so its full budget is still owed.
     assert data["total_var_remaining"] == 400_000 + 300_000 + 119_028
 
-    text = _format_budget(data)
+    text = format_budget_text(data)
     assert "Netflix" in text
     assert "not tracked" in text.lower()
 
@@ -88,7 +88,7 @@ def test_genuinely_unmatched_category_is_surfaced_and_excluded_from_math():
 def test_no_unmatched_section_when_everything_matches():
     data = _run(spent_variable={"Ticket to go home": 300_000})
     assert data["unmatched_spending"] == []
-    text = _format_budget(data)
+    text = format_budget_text(data)
     assert "not tracked" not in text.lower()
 
 

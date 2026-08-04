@@ -1,8 +1,6 @@
-import json
-
 from flask import Blueprint, request
 
-from database import clear_conv_history, save_conv_turn, state_get
+from database import clear_conv_history, save_conv_turn
 from ai.classifier import classify_intent
 from intents import route_intent
 from features.tasks import get_tasks_structured, complete_task_by_id, delete_task_by_id
@@ -21,18 +19,7 @@ from features.reminders import (
 )
 from features.notes import get_notes_structured, save_note, edit_note, delete_note
 from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_idea
-from features.budget import compute_and_persist_budget
 from features.budget.service import get_summary as get_budget_summary
-from features.budget_config import (
-    get_fixed_expenses,
-    get_variable_budgets,
-    add_fixed_expense,
-    edit_fixed_expense,
-    remove_fixed_expense,
-    add_variable_budget,
-    edit_variable_budget,
-    remove_variable_budget,
-)
 from features.quotes import get_quote_of_day
 from features.news import get_news_structured, summarize_article
 from ai.brainstorm import ai_brainstorm
@@ -293,121 +280,6 @@ def ideas_delete(index):
     if not result.startswith("🗑️"):
         return _err("NOT_FOUND", f"No idea at index {index}.", 404)
     return _ok({"index": index, "deleted": True})
-
-
-# ================================================================
-# BUDGET — GET /budget and GET /budget/breakdown moved to the standalone
-# features/budget blueprint (registered at /api/budget in app.py), now
-# derived live from the ledger. POST here is the legacy whole-state NL
-# parser; still active through Phase 2 so the pre-rebuild mobile screen
-# keeps working, removed in B2.4 once the ledger fully replaces it.
-# ================================================================
-@api_bp.route("/budget", methods=["POST"])
-def budget_post():
-    body    = request.get_json(silent=True) or {}
-    message = (body.get("message") or "").strip()
-    if not message:
-        return _err("VALIDATION_ERROR", "message is required.", 400)
-
-    data = compute_and_persist_budget(message)
-    if data is None:
-        return _err("VALIDATION_ERROR", "Could not parse a budget from that message.", 400)
-
-    snapshot = state_get("last_budget_snapshot")
-    return _ok(json.loads(snapshot))
-
-
-# ================================================================
-# BUDGET CONFIG — fixed expenses & variable budgets (Google Sheets).
-# Structured CRUD for the Settings UI; the chat intents in
-# features/budget_config.py (handle_budget_config) still exist
-# separately for NL commands and are unaffected by these routes.
-# ================================================================
-@api_bp.route("/budget/config", methods=["GET"])
-def budget_config_get():
-    fixed    = get_fixed_expenses()
-    variable = get_variable_budgets()
-    return _ok({
-        "fixedExpenses":   [{"name": e["name"], "amount": e["amount"], "dueDay": e["due_day"]} for e in fixed],
-        "variableBudgets": [{"name": v["name"], "budget": v["budget"]} for v in variable],
-    })
-
-
-@api_bp.route("/budget/config/fixed", methods=["POST"])
-def budget_config_fixed_add():
-    body   = request.get_json(silent=True) or {}
-    name   = (body.get("name") or "").strip()
-    amount = body.get("amount")
-    if not name or not isinstance(amount, (int, float)):
-        return _err("VALIDATION_ERROR", "name and amount are required.", 400)
-    result = add_fixed_expense(name, int(amount), body.get("dueDay"))
-    if not result.startswith("✅"):
-        return _err("INTERNAL_ERROR", result, 500)
-    return _ok({"created": True})
-
-
-@api_bp.route("/budget/config/fixed/<string:name>", methods=["PATCH"])
-def budget_config_fixed_edit(name):
-    body = request.get_json(silent=True) or {}
-    result = edit_fixed_expense(
-        name,
-        new_name=(body.get("newName") or None),
-        new_amount=int(body["newAmount"]) if body.get("newAmount") is not None else None,
-        new_due_day=body["newDueDay"] if "newDueDay" in body else ...,
-    )
-    if result.startswith("❌"):
-        return _err("NOT_FOUND", result, 404)
-    if not result.startswith("✏️"):
-        return _err("INTERNAL_ERROR", result, 500)
-    return _ok({"name": name, "updated": True})
-
-
-@api_bp.route("/budget/config/fixed/<string:name>", methods=["DELETE"])
-def budget_config_fixed_delete(name):
-    result = remove_fixed_expense(name)
-    if result.startswith("❌"):
-        return _err("NOT_FOUND", result, 404)
-    if not result.startswith("🗑️"):
-        return _err("INTERNAL_ERROR", result, 500)
-    return _ok({"name": name, "deleted": True})
-
-
-@api_bp.route("/budget/config/variable", methods=["POST"])
-def budget_config_variable_add():
-    body   = request.get_json(silent=True) or {}
-    name   = (body.get("name") or "").strip()
-    budget = body.get("budget")
-    if not name or not isinstance(budget, (int, float)):
-        return _err("VALIDATION_ERROR", "name and budget are required.", 400)
-    result = add_variable_budget(name, int(budget))
-    if not result.startswith("✅"):
-        return _err("INTERNAL_ERROR", result, 500)
-    return _ok({"created": True})
-
-
-@api_bp.route("/budget/config/variable/<string:name>", methods=["PATCH"])
-def budget_config_variable_edit(name):
-    body = request.get_json(silent=True) or {}
-    result = edit_variable_budget(
-        name,
-        new_name=(body.get("newName") or None),
-        new_budget=int(body["newBudget"]) if body.get("newBudget") is not None else None,
-    )
-    if result.startswith("❌"):
-        return _err("NOT_FOUND", result, 404)
-    if not result.startswith("✏️"):
-        return _err("INTERNAL_ERROR", result, 500)
-    return _ok({"name": name, "updated": True})
-
-
-@api_bp.route("/budget/config/variable/<string:name>", methods=["DELETE"])
-def budget_config_variable_delete(name):
-    result = remove_variable_budget(name)
-    if result.startswith("❌"):
-        return _err("NOT_FOUND", result, 404)
-    if not result.startswith("🗑️"):
-        return _err("INTERNAL_ERROR", result, 500)
-    return _ok({"name": name, "deleted": True})
 
 
 # ================================================================

@@ -33,7 +33,7 @@ def _migration_0():
             kind          TEXT    NOT NULL,
             monthly_limit BIGINT,
             rollover      INTEGER NOT NULL DEFAULT 0,
-            keywords      TEXT,
+            keywords      TEXT,    -- reserved; was read only by the removed quick-add NL parser
             icon          TEXT,
             color_index   INTEGER,
             archived      INTEGER NOT NULL DEFAULT 0,

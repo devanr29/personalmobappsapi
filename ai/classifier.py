@@ -23,8 +23,7 @@ Classify the user's message into exactly ONE of these intents:
   get_events    — VIEW, check, look up, or list existing calendar events
   search_memory — ask about something that might be in their notes/ideas
   quote         — ask for a motivational/inspirational quote (e.g. "give me a quote", "motivate me", "quote of the day", "inspire me")
-  budget        — CALCULATE or COMPUTE a budget with actual numbers: user provides a specific monetary amount and wants to know how much they can spend per day / sisa uang / berapa sisa per hari / survive until payday / kalkulasi budget / hitung uang sisa. Requires a specific monetary figure or explicit calculation request.
-  budget_config — VIEW or MANAGE the budget configuration (fixed expenses and variable budgets): add/remove/edit a fixed expense or variable budget category, or list/show/view the current budget setup. Examples: "show budget config", "add fixed expense Gym 200000 due 1", "remove variable Laundry", "edit fixed Internet to 175000", "tambah variable budget Gym 150000", "hapus fixed House Maintenance", "lihat budget config".
+  budget        — ASK about the current budget state: how much money is left, how much per day, what's still owed, how many days to payday / sisa uang / berapa sisa per hari / sisa budget. Read-only — the assistant reports live numbers from the budget ledger and never records or changes anything. Managing wallets, categories, bills, or transactions happens only in the Budget tab, not via chat.
   delete_note   — DELETE or REMOVE a saved note by number or keyword (e.g. "delete note 2", "hapus note fix the logs")
   edit_note     — EDIT or UPDATE the content of a saved note (e.g. "edit note 2 to ...", "update note fix to ...")
   delete_idea   — DELETE or REMOVE a saved idea by number or keyword
@@ -44,8 +43,8 @@ KEY DISAMBIGUATION RULES (apply these before classifying):
 - "add event X" / "schedule X" / "create event X" / "new event X" → add_event
 - "show my reminders" / "list reminders" / "what are my reminders" → get_reminders
 - The word "remind" alone does NOT mean intent=reminder. Look at the full sentence structure.
-- "how to budget" / "tips for budgeting" / "how to spend daily budget wisely" / any advice or how-to question about money → chat (NOT budget). The budget intent requires actual numbers to calculate, not general advice.
-- "how to spend my daily budget wisely?" → chat (advice question, no number to calculate)
+- "how to budget" / "tips for budgeting" / "how to spend daily budget wisely" / any advice or how-to question about money → chat (NOT budget). The budget intent is for reporting the user's own current numbers, not general advice.
+- "how to spend my daily budget wisely?" → chat (advice question, not a status check)
 - "delete/remove/hapus note/idea/task/event/reminder X" → delete_* intent (not complete_task)
 - "edit/update/change/ubah note/idea/task/event/reminder X to/with Y" → edit_* intent
 - "delete task X" → delete_task (permanently remove), NOT complete_task (which marks done)

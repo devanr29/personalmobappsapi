@@ -27,10 +27,7 @@ def test_budget_error_maps_to_envelope(app):
 
 def test_summary_get_and_ping_coexist_on_the_same_blueprint(client, auth_headers):
     # GET /api/budget (the live summary) and GET /api/budget/ping both
-    # live on budget_bp; api_bp separately still owns POST /api/budget
-    # (the legacy whole-state NL parser, removed in Phase 2) on the exact
-    # same path — confirms Werkzeug routes disjoint methods on one path
-    # to different blueprints without collision.
+    # live on budget_bp.
     resp = client.get("/api/budget", headers=auth_headers)
     assert resp.status_code == 200
     resp = client.get("/api/budget/ping", headers=auth_headers)

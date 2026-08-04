@@ -12,8 +12,8 @@ from features.calendar import (
 )
 from features.news import get_news
 from features.quotes import generate_daily_quote
-from features.budget import compute_and_persist_budget, _format_budget, _budget_interactive_prompt
-from features.budget_config import handle_budget_config
+from features.budget import service as budget_service
+from features.budget.chat_view import build_chat_budget_payload
 from features.memory import semantic_search
 from tracer import trace
 
@@ -146,34 +146,13 @@ def route_intent(intent: str, params: dict, incoming: str) -> dict:
         return {"kind": "quote", "text": generate_daily_quote(context), "data": None}
 
     elif intent == "budget":
-        data = compute_and_persist_budget(incoming)
+        data = budget_service.build_period_view()
         if data is None:
-            return _text(_budget_interactive_prompt())
-        text = _format_budget(data)
-        # Line items that sum to total_deductions (same set _format_budget's
-        # "Total deductions" summary lists) so the chat bubble can show what
-        # the total is actually made of, not just the number.
-        deduction_breakdown = (
-            [{"name": e["name"], "amount": e["amount"]} for e in data["still_owed"]]
-            + [{"name": e["name"], "amount": e["amount"]} for e in data["pending_amounts"]]
-            + [{"name": v["name"], "amount": v["remaining"]} for v in data["remaining_var"]]
-        )
-        return {
-            "kind": "budget",
-            "text": text,
-            "data": {
-                "remaining":           data["remaining"],
-                "deductions":          data["total_deductions"],
-                "free":                data["free_money"],
-                "dailyBudget":         data["daily_budget"],
-                "daysToPayday":        data["days_left"],
-                "statusLevel":         data["status_level"],
-                "deductionBreakdown":  deduction_breakdown,
-            },
-        }
-
-    elif intent == "budget_config":
-        return _text(handle_budget_config(incoming))
+            return _text(
+                "💰 Your budget isn't set up yet. Open the Budget tab and run "
+                "setup to add your wallets, categories and bills."
+            )
+        return build_chat_budget_payload(data)
 
     elif intent == "delete_note":
         idx = params.get("index")
