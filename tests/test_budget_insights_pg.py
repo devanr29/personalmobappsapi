@@ -1,0 +1,99 @@
+"""Runs a subset of the insights-layer assertions against a real Postgres
+instance (TEST_DATABASE_URL) — the only thing that catches substr()
+dialect divergence, Postgres's stricter GROUP BY, and Decimal leaking
+into a JSON response as a string instead of a number."""
+import importlib
+import os
+
+import pytest
+
+
+def _pg_url():
+    return os.environ.get("TEST_DATABASE_URL", "").strip()
+
+
+requires_postgres = pytest.mark.skipif(
+    not _pg_url(), reason="set TEST_DATABASE_URL to run against a real Postgres instance"
+)
+
+
+@pytest.fixture
+def pg_budget_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", _pg_url())
+
+    import db as db_module
+    import database as database_module
+    import features.budget.schema as schema_module
+    import features.budget.repo as repo_module
+    import features.budget.periods as periods_module
+    import features.budget.compute as compute_module
+    import features.budget.insights as insights_module
+    import features.budget.service as service_module
+    modules = (db_module, schema_module, database_module, repo_module,
+               periods_module, compute_module, insights_module, service_module)
+    for m in modules:
+        importlib.reload(m)
+
+    database_module.init_db()
+    conn = db_module.db_conn()
+    conn.execute("DELETE FROM budget_transactions WHERE wallet_id IN (SELECT id FROM budget_wallets WHERE name LIKE '_PgIns%')")
+    conn.execute("DELETE FROM budget_categories WHERE name LIKE '_PgIns%'")
+    conn.execute("DELETE FROM budget_wallets WHERE name LIKE '_PgIns%'")
+    conn.commit()
+    conn.close()
+
+    yield service_module, repo_module
+
+    conn = db_module.db_conn()
+    conn.execute("DELETE FROM budget_transactions WHERE wallet_id IN (SELECT id FROM budget_wallets WHERE name LIKE '_PgIns%')")
+    conn.execute("DELETE FROM budget_categories WHERE name LIKE '_PgIns%'")
+    conn.execute("DELETE FROM budget_wallets WHERE name LIKE '_PgIns%'")
+    conn.commit()
+    conn.close()
+    for m in modules:
+        importlib.reload(m)
+
+
+@requires_postgres
+def test_insights_aggregates_are_int_not_decimal_on_postgres(pg_budget_env):
+    service, repo = pg_budget_env
+    wallet = repo.create_wallet("_PgInsCash", opening_balance=500_000, is_default=True)
+    fuel = repo.create_category("_PgInsFuel", "variable", monthly_limit=70_000)
+    period = service.build_period_view()
+    repo.create_transaction(35_000, "expense", category_id=fuel["id"], wallet_id=wallet["id"], period_id=period["period_id"])
+
+    data = service.build_insights()
+    assert isinstance(data["stats"]["spendToDate"], int)
+    assert isinstance(data["stats"]["freeMoney"], int)
+    assert isinstance(data["stats"]["dailyBudget"], int)
+    assert isinstance(data["categories"][0]["spend"], int)
+
+
+@requires_postgres
+def test_insights_daily_bucketing_matches_sqlite_semantics_on_postgres(pg_budget_env):
+    service, repo = pg_budget_env
+    wallet = repo.create_wallet("_PgInsCash2", opening_balance=500_000, is_default=True)
+    period = service.build_period_view()
+    repo.create_transaction(
+        10_000, "expense", wallet_id=wallet["id"], period_id=period["period_id"], occurred_at="2026-07-26 09:00",
+    )
+    repo.create_transaction(
+        20_000, "expense", wallet_id=wallet["id"], period_id=period["period_id"], occurred_at="2026-07-28 09:00",
+    )
+
+    data = service.build_insights()
+    by_date = {d["date"]: d for d in data["daily"]}
+    assert by_date["2026-07-26"]["spend"] == 10_000
+    assert by_date["2026-07-27"]["spend"] == 0  # dense gap-fill, same as SQLite
+    assert by_date["2026-07-28"]["spend"] == 20_000
+
+
+@requires_postgres
+def test_insights_history_on_postgres(pg_budget_env):
+    service, repo = pg_budget_env
+    repo.create_wallet("_PgInsCash3", opening_balance=500_000, is_default=True)
+    period = service.build_period_view()
+    repo.create_transaction(15_000, "expense", period_id=period["period_id"])
+
+    history = service.build_insights_history(periods=6)
+    assert isinstance(history["periods"][0]["spend"], int)

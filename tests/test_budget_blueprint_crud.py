@@ -132,3 +132,33 @@ def test_setup_status_route(client, auth_headers):
     body = resp.get_json()["data"]
     assert "seeded" in body
     assert "walletCount" in body
+
+
+def test_insights_route_shape(client, auth_headers):
+    resp = client.get("/api/budget/insights", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()["data"]
+    if body is not None:
+        for key in ("period", "daily", "pace", "categories", "categoriesTop", "budgetVsActual", "stats", "heatmap", "wallets"):
+            assert key in body
+
+
+def test_insights_history_route_shape(client, auth_headers):
+    resp = client.get("/api/budget/insights/history?periods=3", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()["data"]
+    assert "periods" in body
+    assert "spendTrend" in body
+
+
+def test_insights_history_bad_group_by_is_400(client, auth_headers):
+    resp = client.get("/api/budget/insights/history?groupBy=nonsense", headers=auth_headers)
+    assert resp.status_code == 400
+
+
+def test_breakdown_includes_today_block(client, auth_headers):
+    resp = client.get("/api/budget/breakdown", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()["data"]
+    if body is not None:
+        assert "today" in body

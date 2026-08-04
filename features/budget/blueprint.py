@@ -47,7 +47,25 @@ def summary():
 @budget_bp.route("/breakdown", methods=["GET"])
 def breakdown():
     data = service.build_period_view()
-    return ok(camel_budget_breakdown(data) if data else None)
+    if not data:
+        return ok(None)
+    body = camel_budget_breakdown(data)
+    body["today"] = service.get_today_card()
+    return ok(body)
+
+
+@budget_bp.route("/insights", methods=["GET"])
+def insights_view():
+    return ok(service.build_insights())
+
+
+@budget_bp.route("/insights/history", methods=["GET"])
+def insights_history():
+    periods = _int_arg("periods") or 6
+    group_by = request.args.get("groupBy", "period")
+    if group_by not in ("period", "month"):
+        return err("VALIDATION_ERROR", "groupBy must be 'period' or 'month'.", 400)
+    return ok(service.build_insights_history(periods=periods, group_by=group_by))
 
 
 @budget_bp.route("/import/sheets", methods=["POST"])

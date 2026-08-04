@@ -614,4 +614,156 @@ def restore_transaction(txn_id):
     conn.execute("UPDATE budget_transactions SET deleted_at = NULL WHERE id = ?", (txn_id,))
     conn.commit()
     conn.close()
+
+
+# ================================================================
+# AGGREGATES — for the insights/graphs layer. SQL only, no math (that
+# lives in insights.py, kept pure and DB-free the same way compute.py is).
+#
+# Dual-dialect date bucketing: substr(col, 1, 10) is the day key and
+# substr(col, 1, 7) is the month key — the only date-truncation construct
+# that behaves identically on SQLite and Postgres (no strftime, no
+# date_trunc/EXTRACT, no SUBSTRING(x FROM..FOR..)). Every SUM() goes
+# through _int0(). Booleans compare against 1, never IS TRUE.
+# ================================================================
+def daily_buckets_for_period(period_id) -> list:
+    """One row per calendar day that has activity this period. spend and
+    variable_spend are reported separately — variable_spend excludes
+    'fixed'-kind category spend, which is what the pace chart needs (a
+    big rent bill posting mid-period must not read as blowing the
+    variable budget). transfer/adjustment fall through every CASE to 0."""
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT substr(t.occurred_at, 1, 10) AS day, "
+        "SUM(CASE WHEN t.direction = 'expense' THEN t.amount ELSE 0 END), "
+        "SUM(CASE WHEN t.direction = 'expense' AND c.kind = 'variable' THEN t.amount ELSE 0 END), "
+        "SUM(CASE WHEN t.direction = 'income' THEN t.amount ELSE 0 END), "
+        "COUNT(CASE WHEN t.direction = 'expense' THEN 1 END) "
+        "FROM budget_transactions t "
+        "LEFT JOIN budget_categories c ON c.id = t.category_id "
+        "WHERE t.deleted_at IS NULL AND t.period_id = ? "
+        "GROUP BY substr(t.occurred_at, 1, 10) "
+        "ORDER BY substr(t.occurred_at, 1, 10)",
+        (period_id,),
+    ).fetchall()
+    conn.close()
+    return [
+        {"date": r[0], "spend": _int0(r[1]), "variable_spend": _int0(r[2]), "income": _int0(r[3]), "count": r[4]}
+        for r in rows
+    ]
+
+
+def category_spend_ranked_for_period(period_id) -> list:
+    """Every category with expense spend this period, ranked desc, ties
+    broken by category_id for a deterministic order across refetches
+    (otherwise the sequential-ramp chart colors would flicker). t.category_id
+    IS NULL groups into one 'Uncategorized' row and must not be filtered."""
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT t.category_id, c.name, c.kind, c.monthly_limit, SUM(t.amount), COUNT(*) "
+        "FROM budget_transactions t "
+        "LEFT JOIN budget_categories c ON c.id = t.category_id "
+        "WHERE t.deleted_at IS NULL AND t.period_id = ? AND t.direction = 'expense' "
+        "GROUP BY t.category_id, c.name, c.kind, c.monthly_limit "
+        "ORDER BY SUM(t.amount) DESC, t.category_id",
+        (period_id,),
+    ).fetchall()
+    conn.close()
+    return [
+        {"category_id": r[0], "name": r[1], "kind": r[2], "monthly_limit": r[3], "spend": _int0(r[4]), "count": r[5]}
+        for r in rows
+    ]
+
+
+def period_totals(limit=6) -> list:
+    """The most recent `limit` periods, ascending (oldest first — reversed
+    after the DESC/LIMIT so the limit applies to the right end of the
+    range). The deleted_at filter lives in the JOIN condition, not WHERE —
+    putting it in WHERE would degrade the LEFT JOIN to an INNER JOIN and
+    drop periods with zero transactions from the history entirely."""
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT p.id, p.start_date, p.end_date, "
+        "SUM(CASE WHEN t.direction = 'expense' THEN t.amount ELSE 0 END), "
+        "SUM(CASE WHEN t.direction = 'income' THEN t.amount ELSE 0 END), "
+        "COUNT(CASE WHEN t.direction = 'expense' THEN 1 END) "
+        "FROM budget_periods p "
+        "LEFT JOIN budget_transactions t ON t.period_id = p.id AND t.deleted_at IS NULL "
+        "GROUP BY p.id, p.start_date, p.end_date "
+        "ORDER BY p.start_date DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    rows = [
+        {"period_id": r[0], "start_date": r[1], "end_date": r[2], "spend": _int0(r[3]), "income": _int0(r[4]), "count": r[5]}
+        for r in rows
+    ]
+    return list(reversed(rows))
+
+
+def month_totals(limit=6) -> list:
+    """Same shape as period_totals() but bucketed by calendar month — the
+    alternate axis for the month-over-month chart. Straightforward
+    GROUP BY substr(...), no period join needed."""
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT substr(t.occurred_at, 1, 7) AS month, "
+        "SUM(CASE WHEN t.direction = 'expense' THEN t.amount ELSE 0 END), "
+        "SUM(CASE WHEN t.direction = 'income' THEN t.amount ELSE 0 END), "
+        "COUNT(CASE WHEN t.direction = 'expense' THEN 1 END) "
+        "FROM budget_transactions t "
+        "WHERE t.deleted_at IS NULL "
+        "GROUP BY substr(t.occurred_at, 1, 7) "
+        "ORDER BY substr(t.occurred_at, 1, 7) DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    rows = [{"month": r[0], "spend": _int0(r[1]), "income": _int0(r[2]), "count": r[3]} for r in rows]
+    return list(reversed(rows))
+
+
+def largest_expense_for_period(period_id):
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT t.id, t.note, t.amount, t.occurred_at, c.name "
+        "FROM budget_transactions t LEFT JOIN budget_categories c ON c.id = t.category_id "
+        "WHERE t.period_id = ? AND t.direction = 'expense' AND t.deleted_at IS NULL "
+        "ORDER BY t.amount DESC, t.id LIMIT 1",
+        (period_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {"id": row[0], "name": row[1] or row[4] or "Expense", "amount": row[2], "occurred_at": row[3]}
+
+
+def bills_due_for_period(period_id) -> list:
+    """Active bills not yet marked paid this period. NOT IN (subquery) is
+    safe here only because bill_id is NOT NULL on budget_bill_payments —
+    a NULL in that subquery would make NOT IN match nothing at all."""
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT b.id, b.name, b.amount, b.due_day, b.category_id, b.wallet_id "
+        "FROM budget_bills b "
+        "WHERE b.active = 1 "
+        "AND b.id NOT IN (SELECT bp.bill_id FROM budget_bill_payments bp WHERE bp.period_id = ?) "
+        "ORDER BY b.due_day, b.id",
+        (period_id,),
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "name": r[1], "amount": r[2], "due_day": r[3], "category_id": r[4], "wallet_id": r[5]} for r in rows]
+
+
+def spend_today(period_id, date_str) -> int:
+    """Sum of expense spend on a single calendar day (date_str = the
+    first-10-chars date key), scoped to the current period."""
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM budget_transactions "
+        "WHERE period_id = ? AND direction = 'expense' AND deleted_at IS NULL "
+        "AND substr(occurred_at, 1, 10) = ?",
+        (period_id, date_str),
+    ).fetchone()
+    conn.close()
+    return _int0(row[0])
     return get_transaction(txn_id)
