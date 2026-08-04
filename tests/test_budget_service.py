@@ -113,6 +113,51 @@ def test_list_transactions_date_to_is_inclusive_of_the_whole_day(budget_env):
     assert len(items) == 1
 
 
+def test_colliding_category_names_no_longer_misattribute_spend(budget_env):
+    # The regression id-based matching (Phase 3) exists to fix: on the old
+    # name-matched path, "food" in "fast food" made Fast Food's spend get
+    # attributed to Food instead. Both categories must now track their own
+    # spend independently.
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    food = repo.create_category("Food", "variable", monthly_limit=500_000)
+    fast_food = repo.create_category("Fast Food", "variable", monthly_limit=300_000)
+
+    period = service.build_period_view()
+    period_id = period["period_id"]
+    repo.create_transaction(100_000, "expense", category_id=food["id"], period_id=period_id)
+    repo.create_transaction(250_000, "expense", category_id=fast_food["id"], period_id=period_id)
+
+    data = service.build_period_view()
+    food_line = next(v for v in data["remaining_var"] if v["name"] == "Food")
+    fast_food_line = next(v for v in data["remaining_var"] if v["name"] == "Fast Food")
+    assert food_line["spent"] == 100_000
+    assert food_line["remaining"] == 400_000
+    assert fast_food_line["spent"] == 250_000
+    assert fast_food_line["remaining"] == 50_000
+    assert data["unmatched_spending"] == []
+
+
+def test_spend_on_a_fixed_category_surfaces_as_unmatched(budget_env):
+    # Behavior change from the name-matched path: id matching only reserves
+    # money for 'variable' categories, so spend logged against a 'fixed'
+    # category is no longer silently invisible — it surfaces the same way
+    # a stray spend key used to, and stays excluded from total_deductions
+    # since money_in_hand() already nets it out.
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    rent = repo.create_category("House Rent", "fixed")
+
+    period = service.build_period_view()
+    period_id = period["period_id"]
+    repo.create_transaction(955_000, "expense", category_id=rent["id"], period_id=period_id)
+
+    data = service.build_period_view()
+    unmatched = {u["name"]: u["amount"] for u in data["unmatched_spending"]}
+    assert unmatched == {"House Rent": 955_000}
+    assert data["total_deductions"] == 0
+
+
 def test_paying_a_bill_removes_it_from_still_owed(budget_env):
     service, repo = budget_env
     repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)

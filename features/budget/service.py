@@ -1,19 +1,20 @@
 """Orchestration layer: gathers ledger data via repo, calls the pure
-compute_budget(), and returns period-scoped views. No route/HTTP concerns —
-those live in blueprint.py."""
+compute_budget_by_id(), and returns period-scoped views. No route/HTTP
+concerns — those live in blueprint.py."""
 import datetime
 
 from config import PAYROLL_DAY, now_jkt
 from features.budget import repo
-from features.budget.compute import compute_budget
+from features.budget.compute import compute_budget_by_id
 from features.budget.errors import BudgetNotFound, BudgetValidationError
 from features.budget.periods import ensure_current_period
 
 
 def build_period_view():
-    """Returns the full compute_budget() dict for the current period, plus
-    a period_id key, or None if the feature hasn't been set up yet (no
-    wallets configured) — mirrors the legacy "never computed" null state."""
+    """Returns the full compute_budget_by_id() dict for the current
+    period, plus a period_id key, or None if the feature hasn't been set
+    up yet (no wallets configured) — mirrors the legacy "never computed"
+    null state."""
     wallets = repo.get_wallets()
     if not wallets:
         return None
@@ -24,23 +25,33 @@ def build_period_view():
     days_left = max((end - now).days, 0)
 
     bills = repo.get_bills()
-    fixed_expenses = [{"name": b["name"], "amount": b["amount"], "due_day": b["due_day"]} for b in bills]
     paid_bill_ids = repo.get_paid_bill_ids(period["id"])
-    paid_fixed = [b["name"] for b in bills if b["id"] in paid_bill_ids]
 
-    categories = repo.get_categories(kind="variable")
-    variable_budgets = [{"name": c["name"], "budget": c["monthly_limit"] or 0} for c in categories]
-    spent_variable = {c["name"]: repo.spend_by_category(c["id"], period["id"]) for c in categories}
+    variable = repo.get_categories(kind="variable")
+    variable_ids = {c["id"] for c in variable}
+    categories = [{"id": c["id"], "name": c["name"], "budget": c["monthly_limit"] or 0} for c in variable]
+    spend_rows = repo.spend_by_category_for_period(period["id"])
+    spend_by_category_id = {r["category_id"]: r["spend"] for r in spend_rows}
 
-    money = repo.money_in_hand()
+    # Spend against a category_id that isn't a tracked variable budget —
+    # either uncategorized (category_id is None) or a 'fixed'-kind
+    # category — surfaced the same way the name-matched path surfaced a
+    # spend key with no matching budget line: visible, but excluded from
+    # total_deductions (money_in_hand() already nets it out).
+    unmatched_spending = [
+        {"name": r["category_name"] or "Uncategorized", "amount": r["spend"]}
+        for r in spend_rows
+        if r["category_id"] not in variable_ids and r["spend"] > 0
+    ]
 
-    data = compute_budget(
+    data = compute_budget_by_id(
         days_left=days_left,
-        remaining_money=money,
-        fixed_expenses=fixed_expenses,
-        variable_budgets=variable_budgets,
-        paid_fixed=paid_fixed,
-        spent_variable=spent_variable,
+        remaining_money=repo.money_in_hand(),
+        bills=[{"id": b["id"], "name": b["name"], "amount": b["amount"], "due_day": b["due_day"]} for b in bills],
+        categories=categories,
+        paid_bill_ids=paid_bill_ids,
+        spend_by_category_id=spend_by_category_id,
+        unmatched_spending=unmatched_spending,
     )
     data["period_id"] = period["id"]
     return data

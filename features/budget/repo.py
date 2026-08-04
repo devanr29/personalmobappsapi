@@ -275,6 +275,26 @@ def spend_by_category(category_id, period_id) -> int:
     return _int0(row[0])
 
 
+def spend_by_category_for_period(period_id) -> list:
+    """One query for every category's spend this period, in id-grouped
+    rows — replaces the N-query per-category loop build_period_view() used
+    to run. t.category_id IS NULL groups into a single row (the
+    "uncategorized" bucket), which callers must not filter out. Every
+    selected non-aggregate column is in GROUP BY — Postgres requires it,
+    SQLite doesn't enforce it but accepts it identically."""
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT t.category_id, c.name, COALESCE(SUM(t.amount), 0) "
+        "FROM budget_transactions t "
+        "LEFT JOIN budget_categories c ON c.id = t.category_id "
+        "WHERE t.period_id = ? AND t.direction = 'expense' AND t.deleted_at IS NULL "
+        "GROUP BY t.category_id, c.name",
+        (period_id,),
+    ).fetchall()
+    conn.close()
+    return [{"category_id": r[0], "category_name": r[1], "spend": _int0(r[2])} for r in rows]
+
+
 # ================================================================
 # BILLS — read-only accessors for now; full CRUD (create/update/delete/
 # pay/unpay) is Phase 2 work. Needed here because build_period_view()
