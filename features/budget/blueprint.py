@@ -5,6 +5,7 @@ here via the shared functions in api_common.py."""
 from flask import Blueprint, request
 
 from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_error, start_timer, log_timing
+from db import db_conn
 from features.budget import repo, service
 from features.budget.errors import BudgetError
 from features.budget.serializers import (
@@ -57,12 +58,20 @@ def summary():
 
 @budget_bp.route("/breakdown", methods=["GET"])
 def breakdown():
-    data = service.build_period_view()
-    if not data:
-        return ok(None)
-    body = camel_budget_breakdown(data)
-    body["today"] = service.get_today_card()
-    return ok(body)
+    # One connection shared across both calls: build_period_view() is a
+    # ~9-round-trip aggregate, and get_today_card() used to recompute it
+    # from scratch internally — passing the already-computed `data` in as
+    # `view` skips that second full pass entirely.
+    conn = db_conn()
+    try:
+        data = service.build_period_view(conn=conn)
+        if not data:
+            return ok(None)
+        body = camel_budget_breakdown(data)
+        body["today"] = service.get_today_card(view=data, conn=conn)
+        return ok(body)
+    finally:
+        conn.close()
 
 
 @budget_bp.route("/insights", methods=["GET"])

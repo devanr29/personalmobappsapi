@@ -27,7 +27,7 @@ def set_payroll_day(day: int):
     state_set("payroll_day", str(day))
 
 
-def build_period_view():
+def build_period_view(conn=None):
     """Returns the full compute_budget_by_id() dict for the current
     period, plus a period_id key, or None if the feature hasn't been set
     up yet (no wallets configured) — mirrors the legacy "never computed"
@@ -38,8 +38,17 @@ def build_period_view():
     this is the GET /api/home and GET /api/budget hot path, and against
     a remote DB each extra db_conn() round-trip is real, measurable
     latency — 10 separate connections vs. 1 was the difference between
-    this endpoint timing out on the mobile app and returning promptly."""
-    conn = db_conn()
+    this endpoint timing out on the mobile app and returning promptly.
+
+    Accepts a caller-owned `conn` so get_today_card()/build_insights()
+    (which both need a full period view plus more of their own reads) can
+    share one connection across the whole request instead of each paying
+    for build_period_view()'s ~9 round-trips separately — GET /breakdown
+    used to call this indirectly twice (once directly, once inside
+    get_today_card()), which is what made it the slowest endpoint."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     try:
         wallets = repo.get_wallets(conn=conn)
         if not wallets:
@@ -83,7 +92,8 @@ def build_period_view():
         data["period_id"] = period["id"]
         return data
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
 
 
 def _months_between(from_date: datetime.date, to_date: datetime.date) -> int:
@@ -535,27 +545,42 @@ def _next_bill_due(bills, today):
             "dueDay": best["due_day"], "daysUntil": days_until(best)}
 
 
-def get_today_card():
+def get_today_card(view=None, conn=None):
     """Returns None when the ledger isn't set up (mirrors build_period_view).
     today_spend/allowance are computed once here and reused by both the
-    /breakdown route and build_insights()'s stats, so the two can't drift."""
-    view = build_period_view()
-    if view is None:
-        return None
-    period = ensure_current_period(get_payroll_day())
-    today = now_jkt().date()
-    today_spend = repo.spend_today(period["id"], today.isoformat())
-    allowance = insights.today_allowance(
-        free_money=view["free_money"], days_left=view["days_left"], today_spend=today_spend,
-    )
-    bills_due = repo.bills_due_for_period(period["id"])
-    return {
-        "date": today.isoformat(),
-        "spend": today_spend,
-        "allowance": allowance["allowance"],
-        "remainingToday": allowance["remainingToday"],
-        "nextBill": _next_bill_due(bills_due, today),
-    }
+    /breakdown route and build_insights()'s stats, so the two can't drift.
+
+    Pass `view` when the caller already has a build_period_view() result
+    (breakdown()/build_insights() both do) — GET /breakdown used to call
+    build_period_view() once directly and again inside here, doubling its
+    ~9-round-trip cost and pushing it well past the mobile client's
+    timeout. `conn` lets the (period_id-only) reads below join whatever
+    connection the caller is already using instead of opening a new one."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    try:
+        if view is None:
+            view = build_period_view(conn=conn)
+        if view is None:
+            return None
+        period_id = view["period_id"]
+        today = now_jkt().date()
+        today_spend = repo.spend_today(period_id, today.isoformat(), conn=conn)
+        allowance = insights.today_allowance(
+            free_money=view["free_money"], days_left=view["days_left"], today_spend=today_spend,
+        )
+        bills_due = repo.bills_due_for_period(period_id, conn=conn)
+        return {
+            "date": today.isoformat(),
+            "spend": today_spend,
+            "allowance": allowance["allowance"],
+            "remainingToday": allowance["remainingToday"],
+            "nextBill": _next_bill_due(bills_due, today),
+        }
+    finally:
+        if owns_conn:
+            conn.close()
 
 
 # ================================================================
@@ -570,93 +595,102 @@ def _camel_largest_expense(row):
 
 
 def build_insights():
-    view = build_period_view()
-    if view is None:
-        return None
+    """Shares one connection across the whole computation, same reasoning
+    as build_period_view()'s docstring. This used to call
+    build_period_view() (directly) and get_today_card() (which called
+    build_period_view() AGAIN internally) — two full ~9-round-trip period
+    views computed back to back, on top of this function's own reads."""
+    conn = db_conn()
+    try:
+        view = build_period_view(conn=conn)
+        if view is None:
+            return None
 
-    period = ensure_current_period(get_payroll_day())
-    today = now_jkt().date()
-    start = datetime.date.fromisoformat(period["start_date"])
-    end = datetime.date.fromisoformat(period["end_date"])
-    total_days = max((end - start).days, 1)
-    through = min(today, end - datetime.timedelta(days=1))
-    if through < start:
-        through = start
-    elapsed_days = (through - start).days + 1
+        period = ensure_current_period(get_payroll_day(), conn=conn)
+        today = now_jkt().date()
+        start = datetime.date.fromisoformat(period["start_date"])
+        end = datetime.date.fromisoformat(period["end_date"])
+        total_days = max((end - start).days, 1)
+        through = min(today, end - datetime.timedelta(days=1))
+        if through < start:
+            through = start
+        elapsed_days = (through - start).days + 1
 
-    daily_rows = repo.daily_buckets_for_period(period["id"])
-    daily = insights.daily_series(daily_rows, period["start_date"], through.isoformat())
+        daily_rows = repo.daily_buckets_for_period(period["id"], conn=conn)
+        daily = insights.daily_series(daily_rows, period["start_date"], through.isoformat())
 
-    variable = repo.get_categories(kind="variable")
-    envelope = sum(c["monthly_limit"] or 0 for c in variable)
-    pace = insights.cumulative_pace(daily, envelope, total_days)
+        variable = repo.get_categories(kind="variable", conn=conn)
+        envelope = sum(c["monthly_limit"] or 0 for c in variable)
+        pace = insights.cumulative_pace(daily, envelope, total_days)
 
-    ranked = repo.category_spend_ranked_for_period(period["id"])
-    total_category_spend = sum(r["spend"] for r in ranked) or 1
-    categories_full = [
-        {"categoryId": r["category_id"], "name": r["name"] or "Uncategorized", "kind": r["kind"],
-         "spend": r["spend"], "count": r["count"], "limit": r["monthly_limit"],
-         "share": round(r["spend"] / total_category_spend, 4)}
-        for r in ranked
-    ]
-    categories_top = insights.top_n_with_other(ranked, n=4)
+        ranked = repo.category_spend_ranked_for_period(period["id"], conn=conn)
+        total_category_spend = sum(r["spend"] for r in ranked) or 1
+        categories_full = [
+            {"categoryId": r["category_id"], "name": r["name"] or "Uncategorized", "kind": r["kind"],
+             "spend": r["spend"], "count": r["count"], "limit": r["monthly_limit"],
+             "share": round(r["spend"] / total_category_spend, 4)}
+            for r in ranked
+        ]
+        categories_top = insights.top_n_with_other(ranked, n=4)
 
-    spend_by_id = {r["category_id"]: r["spend"] for r in ranked if r["category_id"] is not None}
-    budget_vs_actual = insights.budget_vs_actual(
-        [{"id": c["id"], "name": c["name"], "monthly_limit": c["monthly_limit"]} for c in variable],
-        spend_by_id,
-    )
+        spend_by_id = {r["category_id"]: r["spend"] for r in ranked if r["category_id"] is not None}
+        budget_vs_actual = insights.budget_vs_actual(
+            [{"id": c["id"], "name": c["name"], "monthly_limit": c["monthly_limit"]} for c in variable],
+            spend_by_id,
+        )
 
-    cumulative_spend = sum(d["spend"] for d in daily)
-    today_card = get_today_card()
-    projection = insights.project_end_balance(
-        money_in_hand=view["remaining"], total_still_owed=view["total_still_owed"],
-        cumulative_spend=cumulative_spend, elapsed_days=elapsed_days, days_left=view["days_left"],
-    )
+        cumulative_spend = sum(d["spend"] for d in daily)
+        today_card = get_today_card(view=view, conn=conn)
+        projection = insights.project_end_balance(
+            money_in_hand=view["remaining"], total_still_owed=view["total_still_owed"],
+            cumulative_spend=cumulative_spend, elapsed_days=elapsed_days, days_left=view["days_left"],
+        )
 
-    wallets = repo.get_wallets()
-    balances = repo.wallet_balances()
-    wallet_total = sum(balances.get(w["id"], 0) for w in wallets)
-    wallet_items = sorted(
-        [{"id": w["id"], "name": w["name"], "kind": w["kind"], "spendable": w["spendable"],
-          "balance": balances.get(w["id"], 0),
-          "share": round(balances.get(w["id"], 0) / wallet_total, 4) if wallet_total else 0}
-         for w in wallets],
-        key=lambda w: w["balance"], reverse=True,
-    )
-    spendable_total = sum(balances.get(w["id"], 0) for w in wallets if w["spendable"])
+        wallets = repo.get_wallets(conn=conn)
+        balances = repo.wallet_balances(conn=conn)
+        wallet_total = sum(balances.get(w["id"], 0) for w in wallets)
+        wallet_items = sorted(
+            [{"id": w["id"], "name": w["name"], "kind": w["kind"], "spendable": w["spendable"],
+              "balance": balances.get(w["id"], 0),
+              "share": round(balances.get(w["id"], 0) / wallet_total, 4) if wallet_total else 0}
+             for w in wallets],
+            key=lambda w: w["balance"], reverse=True,
+        )
+        spendable_total = sum(balances.get(w["id"], 0) for w in wallets if w["spendable"])
 
-    return {
-        "period": {
-            "id": period["id"], "startDate": period["start_date"], "endDate": period["end_date"],
-            "label": insights.period_label(period["start_date"], period["end_date"]),
-            "totalDays": total_days, "elapsedDays": elapsed_days, "daysLeft": view["days_left"],
-            "payrollDay": period["payroll_day"],
-        },
-        "daily": daily,
-        "pace": pace,
-        "categories": categories_full,
-        "categoriesTop": categories_top,
-        "budgetVsActual": budget_vs_actual,
-        "stats": {
-            "moneyInHand": view["remaining"],
-            "totalStillOwed": view["total_still_owed"],
-            "freeMoney": view["free_money"],
-            "dailyBudget": int(view["daily_budget"]),
-            "statusLevel": view["status_level"],
-            "spendToDate": cumulative_spend,
-            "avgDailySpend": projection["avgDailySpend"],
-            "projectedRemainingSpend": projection["projectedRemainingSpend"],
-            "projectedEndBalance": projection["projectedEndBalance"],
-            "burnRateVsIdeal": projection["avgDailySpend"] - pace["idealPerDay"],
-            "largestExpense": _camel_largest_expense(repo.largest_expense_for_period(period["id"])),
-            "spendSparkline": insights.trailing_days(daily, 7),
-            "todayAllowance": today_card["allowance"] if today_card else 0,
-            "todayRemaining": today_card["remainingToday"] if today_card else 0,
-        },
-        "heatmap": insights.heatmap_cells(daily),
-        "wallets": {"items": wallet_items, "total": wallet_total, "spendableTotal": spendable_total},
-    }
+        return {
+            "period": {
+                "id": period["id"], "startDate": period["start_date"], "endDate": period["end_date"],
+                "label": insights.period_label(period["start_date"], period["end_date"]),
+                "totalDays": total_days, "elapsedDays": elapsed_days, "daysLeft": view["days_left"],
+                "payrollDay": period["payroll_day"],
+            },
+            "daily": daily,
+            "pace": pace,
+            "categories": categories_full,
+            "categoriesTop": categories_top,
+            "budgetVsActual": budget_vs_actual,
+            "stats": {
+                "moneyInHand": view["remaining"],
+                "totalStillOwed": view["total_still_owed"],
+                "freeMoney": view["free_money"],
+                "dailyBudget": int(view["daily_budget"]),
+                "statusLevel": view["status_level"],
+                "spendToDate": cumulative_spend,
+                "avgDailySpend": projection["avgDailySpend"],
+                "projectedRemainingSpend": projection["projectedRemainingSpend"],
+                "projectedEndBalance": projection["projectedEndBalance"],
+                "burnRateVsIdeal": projection["avgDailySpend"] - pace["idealPerDay"],
+                "largestExpense": _camel_largest_expense(repo.largest_expense_for_period(period["id"], conn=conn)),
+                "spendSparkline": insights.trailing_days(daily, 7),
+                "todayAllowance": today_card["allowance"] if today_card else 0,
+                "todayRemaining": today_card["remainingToday"] if today_card else 0,
+            },
+            "heatmap": insights.heatmap_cells(daily),
+            "wallets": {"items": wallet_items, "total": wallet_total, "spendableTotal": spendable_total},
+        }
+    finally:
+        conn.close()
 
 
 def build_insights_history(periods: int = 6, group_by: str = "period"):

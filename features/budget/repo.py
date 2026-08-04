@@ -904,13 +904,15 @@ def restore_transaction(txn_id):
 # date_trunc/EXTRACT, no SUBSTRING(x FROM..FOR..)). Every SUM() goes
 # through _int0(). Booleans compare against 1, never IS TRUE.
 # ================================================================
-def daily_buckets_for_period(period_id) -> list:
+def daily_buckets_for_period(period_id, conn=None) -> list:
     """One row per calendar day that has activity this period. spend and
     variable_spend are reported separately — variable_spend excludes
     'fixed'-kind category spend, which is what the pace chart needs (a
     big rent bill posting mid-period must not read as blowing the
     variable budget). transfer/adjustment fall through every CASE to 0."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     rows = conn.execute(
         "SELECT substr(t.occurred_at, 1, 10) AS day, "
         "SUM(CASE WHEN t.direction = 'expense' THEN t.amount ELSE 0 END), "
@@ -924,19 +926,22 @@ def daily_buckets_for_period(period_id) -> list:
         "ORDER BY substr(t.occurred_at, 1, 10)",
         (period_id,),
     ).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [
         {"date": r[0], "spend": _int0(r[1]), "variable_spend": _int0(r[2]), "income": _int0(r[3]), "count": r[4]}
         for r in rows
     ]
 
 
-def category_spend_ranked_for_period(period_id) -> list:
+def category_spend_ranked_for_period(period_id, conn=None) -> list:
     """Every category with expense spend this period, ranked desc, ties
     broken by category_id for a deterministic order across refetches
     (otherwise the sequential-ramp chart colors would flicker). t.category_id
     IS NULL groups into one 'Uncategorized' row and must not be filtered."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     rows = conn.execute(
         "SELECT t.category_id, c.name, c.kind, c.monthly_limit, SUM(t.amount), COUNT(*) "
         "FROM budget_transactions t "
@@ -946,7 +951,8 @@ def category_spend_ranked_for_period(period_id) -> list:
         "ORDER BY SUM(t.amount) DESC, t.category_id",
         (period_id,),
     ).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [
         {"category_id": r[0], "name": r[1], "kind": r[2], "monthly_limit": r[3], "spend": _int0(r[4]), "count": r[5]}
         for r in rows
@@ -1000,8 +1006,10 @@ def month_totals(limit=6) -> list:
     return list(reversed(rows))
 
 
-def largest_expense_for_period(period_id):
-    conn = db_conn()
+def largest_expense_for_period(period_id, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     row = conn.execute(
         "SELECT t.id, t.note, t.amount, t.occurred_at, c.name "
         "FROM budget_transactions t LEFT JOIN budget_categories c ON c.id = t.category_id "
@@ -1009,17 +1017,20 @@ def largest_expense_for_period(period_id):
         "ORDER BY t.amount DESC, t.id LIMIT 1",
         (period_id,),
     ).fetchone()
-    conn.close()
+    if owns_conn:
+        conn.close()
     if row is None:
         return None
     return {"id": row[0], "name": row[1] or row[4] or "Expense", "amount": row[2], "occurred_at": row[3]}
 
 
-def bills_due_for_period(period_id) -> list:
+def bills_due_for_period(period_id, conn=None) -> list:
     """Active bills not yet marked paid this period. NOT IN (subquery) is
     safe here only because bill_id is NOT NULL on budget_bill_payments —
     a NULL in that subquery would make NOT IN match nothing at all."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     rows = conn.execute(
         "SELECT b.id, b.name, b.amount, b.due_day, b.category_id, b.wallet_id "
         "FROM budget_bills b "
@@ -1028,20 +1039,23 @@ def bills_due_for_period(period_id) -> list:
         "ORDER BY b.due_day, b.id",
         (period_id,),
     ).fetchall()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return [{"id": r[0], "name": r[1], "amount": r[2], "due_day": r[3], "category_id": r[4], "wallet_id": r[5]} for r in rows]
 
 
-def spend_today(period_id, date_str) -> int:
+def spend_today(period_id, date_str, conn=None) -> int:
     """Sum of expense spend on a single calendar day (date_str = the
     first-10-chars date key), scoped to the current period."""
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     row = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM budget_transactions "
         "WHERE period_id = ? AND direction = 'expense' AND deleted_at IS NULL "
         "AND substr(occurred_at, 1, 10) = ?",
         (period_id, date_str),
     ).fetchone()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return _int0(row[0])
-    return get_transaction(txn_id)
