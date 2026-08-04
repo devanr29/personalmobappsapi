@@ -83,8 +83,34 @@ def test_full_view_matches_expected_shape_once_seeded(budget_env):
     summary = service.get_summary()
     assert summary["remaining"] == 3_254_624
     assert summary["deductions"] == data["total_deductions"]
-    assert summary["dailyBudget"] == data["daily_budget"]
+    # dailyBudget is coerced to int at the serialization boundary (repo.py
+    # aggregates return Decimal on Postgres; a raw float/Decimal in JSON
+    # would render as a string or NaN client-side) — compute_budget()'s
+    # own float output in `data` is untouched.
+    assert summary["dailyBudget"] == int(data["daily_budget"])
     assert "computedAt" in summary
+
+
+def test_occurred_at_is_normalized_to_naive_minute_precision(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=100_000, is_default=True)
+
+    txn, _ = service.create_transaction(5_000, "expense", occurred_at="2026-08-03T14:22:00+07:00")
+    assert txn["occurred_at"] == "2026-08-03 14:22"
+
+    txn2, _ = service.create_transaction(5_000, "expense", occurred_at="2026-08-03")
+    assert txn2["occurred_at"] == "2026-08-03 00:00"
+
+
+def test_list_transactions_date_to_is_inclusive_of_the_whole_day(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=100_000, is_default=True)
+
+    service.create_transaction(5_000, "expense", occurred_at="2026-08-03 23:00")
+
+    items, total = service.list_transactions(date_to="2026-08-03")
+    assert total == 1
+    assert len(items) == 1
 
 
 def test_paying_a_bill_removes_it_from_still_owed(budget_env):

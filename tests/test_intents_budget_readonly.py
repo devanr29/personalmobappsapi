@@ -49,7 +49,9 @@ def test_budget_intent_with_ledger_matches_service_summary(budget_env):
     assert result["kind"] == "budget"
 
     summary = service.get_summary()
+    # both are int-coerced at their respective serialization boundaries
     assert result["data"]["dailyBudget"] == summary["dailyBudget"]
+    assert isinstance(result["data"]["dailyBudget"], int)
     assert result["data"]["free"] == summary["free"]
     assert result["data"]["statusLevel"] == summary["statusLevel"]
 

@@ -53,6 +53,9 @@ class _PGConn:
     def commit(self):
         self._conn.commit()
 
+    def rollback(self):
+        self._conn.rollback()
+
     def close(self):
         self._conn.close()
 
@@ -84,6 +87,16 @@ def _pg_lastrowid(cur, sql):
                 pass
             return None
     return None
+
+
+def integrity_errors():
+    """The exception tuple to catch for a UNIQUE/FK constraint violation,
+    in whichever dialect is active — needed by any write that relies on a
+    UNIQUE constraint as its concurrency guard (e.g. budget_bill_payments'
+    UNIQUE(bill_id, period_id) for mark-paid)."""
+    if IS_PG:
+        return (psycopg2.IntegrityError,)
+    return (sqlite3.IntegrityError,)
 
 
 def db_conn():

@@ -92,6 +92,18 @@ def test_delete_unknown_transaction_is_404(client, auth_headers):
     assert resp.get_json()["error"]["code"] == "NOT_FOUND"
 
 
+def test_list_transactions_bad_limit_falls_back_instead_of_500(client, auth_headers):
+    resp = client.get("/api/budget/transactions?limit=abc", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]["items"] == [] or isinstance(resp.get_json()["data"]["items"], list)
+
+
+def test_list_transactions_limit_is_capped(client, auth_headers):
+    resp = client.get("/api/budget/transactions?limit=100000", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["meta"]["limit"] <= 200
+
+
 def test_list_transactions_paginates_via_meta(client, auth_headers, wallet_and_category):
     wallet, category = wallet_and_category
     created_ids = []

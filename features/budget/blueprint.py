@@ -65,7 +65,8 @@ def import_sheets():
 @budget_bp.route("/wallets", methods=["GET"])
 def wallets_list():
     wallets = repo.get_wallets()
-    return ok({"items": [{**camel_wallet(w), "balance": repo.wallet_balance(w["id"])} for w in wallets]})
+    balances = repo.wallet_balances()
+    return ok({"items": [{**camel_wallet(w), "balance": balances.get(w["id"], 0)} for w in wallets]})
 
 
 @budget_bp.route("/categories", methods=["GET"])
@@ -78,16 +79,22 @@ def categories_list():
 # ================================================================
 # TRANSACTIONS
 # ================================================================
+_MAX_TXN_LIMIT = 200
+
+
 def _int_arg(name):
     raw = request.args.get(name)
     if raw is None or raw == "":
         return None
-    return int(raw)
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 @budget_bp.route("/transactions", methods=["GET"])
 def transactions_list():
-    limit = _int_arg("limit") or 50
+    limit = min(_int_arg("limit") or 50, _MAX_TXN_LIMIT)
     offset = _int_arg("offset") or 0
     items, total = service.list_transactions(
         category_id=_int_arg("categoryId"),

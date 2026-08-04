@@ -28,17 +28,28 @@ def camel_bill(b: dict) -> dict:
 
 
 def camel_transaction(t: dict) -> dict:
-    category = repo.get_category(t["category_id"]) if t["category_id"] is not None else None
-    wallet = repo.get_wallet(t["wallet_id"]) if t["wallet_id"] is not None else None
+    # repo.get_transactions() (list queries) already joins these in; only
+    # the single-row create/update/delete paths need the extra lookups —
+    # 2 queries there is fine, it's the 50-row list that made the N+1 hurt.
+    if "category_name" in t:
+        category_name = t["category_name"]
+    else:
+        category = repo.get_category(t["category_id"]) if t["category_id"] is not None else None
+        category_name = category["name"] if category else None
+    if "wallet_name" in t:
+        wallet_name = t["wallet_name"]
+    else:
+        wallet = repo.get_wallet(t["wallet_id"]) if t["wallet_id"] is not None else None
+        wallet_name = wallet["name"] if wallet else None
     return {
         "id": t["id"],
         "occurredAt": t["occurred_at"],
         "amount": t["amount"],
         "direction": t["direction"],
         "categoryId": t["category_id"],
-        "categoryName": category["name"] if category else None,
+        "categoryName": category_name,
         "walletId": t["wallet_id"],
-        "walletName": wallet["name"] if wallet else None,
+        "walletName": wallet_name,
         "note": t["note"],
         "source": t["source"],
         "billId": t["bill_id"],
@@ -74,7 +85,7 @@ def camel_budget_breakdown(data: dict) -> dict:
         "totalVarRemaining": data["total_var_remaining"],
         "totalDeductions": data["total_deductions"],
         "freeMoney": data["free_money"],
-        "dailyBudget": data["daily_budget"],
+        "dailyBudget": int(data["daily_budget"]),
         "daysLeft": data["days_left"],
         "statusLevel": data["status_level"],
     }

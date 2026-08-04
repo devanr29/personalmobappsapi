@@ -10,6 +10,16 @@ bound parameter (the ? placeholders)."""
 from config import now_jkt
 from db import db_conn
 
+
+def _int0(value) -> int:
+    """SUM()/COALESCE() returns Decimal on Postgres (numeric) and int on
+    SQLite. Flask's DefaultJSONProvider serializes Decimal as a JSON
+    *string*, so an uncoerced aggregate would silently ship "350000"
+    instead of 350000 and every client-side chart would render NaN.
+    Coerce at the DB boundary, once, here."""
+    return int(value or 0)
+
+
 # ================================================================
 # WALLETS
 # ================================================================
@@ -105,39 +115,52 @@ def delete_wallet(wallet_id):
     conn.close()
 
 
-def wallet_balance(wallet_id) -> int:
-    wallet = get_wallet(wallet_id)
-    if wallet is None:
-        return 0
+def wallet_balances() -> dict:
+    """{wallet_id: balance} for every wallet (including archived — callers
+    filter as needed) in 3 queries total, instead of 4 per wallet.
+
+    'adjustment' is signed and applies at face value (positive tops up a
+    wallet, negative reduces it — reconcile.py's contract); 'transfer'
+    leaves wallet_id (debited) and lands in transfer_wallet_id (credited)."""
     conn = db_conn()
-    income = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM budget_transactions "
-        "WHERE wallet_id = ? AND direction = 'income' AND deleted_at IS NULL",
-        (wallet_id,),
-    ).fetchone()[0]
-    expense = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM budget_transactions "
-        "WHERE wallet_id = ? AND direction = 'expense' AND deleted_at IS NULL",
-        (wallet_id,),
-    ).fetchone()[0]
-    transfers_in = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM budget_transactions "
-        "WHERE transfer_wallet_id = ? AND direction = 'transfer' AND deleted_at IS NULL",
-        (wallet_id,),
-    ).fetchone()[0]
-    transfers_out = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM budget_transactions "
-        "WHERE wallet_id = ? AND direction = 'transfer' AND deleted_at IS NULL",
-        (wallet_id,),
-    ).fetchone()[0]
+    wallets = conn.execute("SELECT id, opening_balance FROM budget_wallets").fetchall()
+    out = {row[0]: _int0(row[1]) for row in wallets}
+
+    for wallet_id, delta in conn.execute(
+        "SELECT wallet_id, "
+        "SUM(CASE WHEN direction = 'income'     THEN  amount "
+        "         WHEN direction = 'adjustment' THEN  amount "
+        "         WHEN direction = 'expense'    THEN -amount "
+        "         WHEN direction = 'transfer'   THEN -amount "
+        "         ELSE 0 END) "
+        "FROM budget_transactions "
+        "WHERE deleted_at IS NULL AND wallet_id IS NOT NULL "
+        "GROUP BY wallet_id"
+    ).fetchall():
+        if wallet_id in out:
+            out[wallet_id] += _int0(delta)
+
+    for wallet_id, delta in conn.execute(
+        "SELECT transfer_wallet_id, SUM(amount) FROM budget_transactions "
+        "WHERE deleted_at IS NULL AND direction = 'transfer' "
+        "AND transfer_wallet_id IS NOT NULL GROUP BY transfer_wallet_id"
+    ).fetchall():
+        if wallet_id in out:
+            out[wallet_id] += _int0(delta)
+
     conn.close()
-    return wallet["opening_balance"] + income - expense + transfers_in - transfers_out
+    return out
+
+
+def wallet_balance(wallet_id) -> int:
+    return wallet_balances().get(wallet_id, 0)
 
 
 def money_in_hand() -> int:
     """Sum of every spendable, non-archived wallet's balance."""
+    balances = wallet_balances()
     return sum(
-        wallet_balance(w["id"])
+        balances.get(w["id"], 0)
         for w in get_wallets(include_archived=False)
         if w["spendable"]
     )
@@ -249,7 +272,7 @@ def spend_by_category(category_id, period_id) -> int:
         (category_id, period_id),
     ).fetchone()
     conn.close()
-    return row[0]
+    return _int0(row[0])
 
 
 # ================================================================
@@ -314,6 +337,18 @@ _TXN_COLS = (
     "id, occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id, "
     "period_id, bill_id, goal_id, note, source, raw_input, created_at, deleted_at"
 )
+_TXN_COLS_LIST = [c.strip() for c in _TXN_COLS.split(",")]
+
+# Joined variant for list queries: pulls category/wallet names in the same
+# query instead of camel_transaction() issuing 2 extra lookups per row
+# (each opening its own connection — 50 rows was 101 connections).
+_TXN_LIST_SQL = (
+    "SELECT " + ", ".join("t." + c for c in _TXN_COLS_LIST) + ", "
+    "c.name AS category_name, w.name AS wallet_name "
+    "FROM budget_transactions t "
+    "LEFT JOIN budget_categories c ON c.id = t.category_id "
+    "LEFT JOIN budget_wallets    w ON w.id = t.wallet_id "
+)
 
 
 def _txn_row(row):
@@ -323,6 +358,13 @@ def _txn_row(row):
         "period_id": row[7], "bill_id": row[8], "goal_id": row[9], "note": row[10],
         "source": row[11], "raw_input": row[12], "created_at": row[13], "deleted_at": row[14],
     }
+
+
+def _txn_list_row(row):
+    txn = _txn_row(row)
+    txn["category_name"] = row[15]
+    txn["wallet_name"] = row[16]
+    return txn
 
 
 def create_transaction(
@@ -356,38 +398,38 @@ def get_transaction(txn_id):
 
 def get_transactions(period_id=None, category_id=None, wallet_id=None, direction=None,
                       date_from=None, date_to=None, limit=50, offset=0):
-    clauses = ["deleted_at IS NULL"]
+    clauses = ["t.deleted_at IS NULL"]
     params = []
     if period_id is not None:
-        clauses.append("period_id = ?")
+        clauses.append("t.period_id = ?")
         params.append(period_id)
     if category_id is not None:
-        clauses.append("category_id = ?")
+        clauses.append("t.category_id = ?")
         params.append(category_id)
     if wallet_id is not None:
-        clauses.append("wallet_id = ?")
+        clauses.append("t.wallet_id = ?")
         params.append(wallet_id)
     if direction is not None:
-        clauses.append("direction = ?")
+        clauses.append("t.direction = ?")
         params.append(direction)
     if date_from is not None:
-        clauses.append("occurred_at >= ?")
+        clauses.append("t.occurred_at >= ?")
         params.append(date_from)
     if date_to is not None:
-        clauses.append("occurred_at <= ?")
+        clauses.append("t.occurred_at <= ?")
         params.append(date_to)
     where = "WHERE " + " AND ".join(clauses)
 
     conn = db_conn()
-    count_sql = "SELECT COUNT(*) FROM budget_transactions " + where
+    count_sql = "SELECT COUNT(*) FROM budget_transactions t " + where
     total = conn.execute(count_sql, params).fetchone()[0]
     list_sql = (
-        "SELECT " + _TXN_COLS + " FROM budget_transactions " + where +
-        " ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?"
+        _TXN_LIST_SQL + where +
+        " ORDER BY t.occurred_at DESC, t.id DESC LIMIT ? OFFSET ?"
     )
     rows = conn.execute(list_sql, params + [limit, offset]).fetchall()
     conn.close()
-    return [_txn_row(r) for r in rows], total
+    return [_txn_list_row(r) for r in rows], total
 
 
 _TXN_UPDATABLE = {

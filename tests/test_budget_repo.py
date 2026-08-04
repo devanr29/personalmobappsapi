@@ -99,3 +99,61 @@ def test_get_transactions_pagination_and_filters(repo, period_id):
 
     items, total = repo.get_transactions(period_id=period_id, direction="income")
     assert total == 0
+
+
+def test_wallet_balances_batches_every_wallet_in_one_pass(repo):
+    cash = repo.create_wallet("Cash", opening_balance=100_000, spendable=True)
+    bank = repo.create_wallet("Bank", opening_balance=500_000, spendable=True)
+
+    repo.create_transaction(20_000, "expense", wallet_id=cash["id"])
+    repo.create_transaction(10_000, "income", wallet_id=bank["id"])
+
+    balances = repo.wallet_balances()
+    assert balances[cash["id"]] == 80_000
+    assert balances[bank["id"]] == 510_000
+    assert repo.wallet_balance(cash["id"]) == balances[cash["id"]]
+    assert repo.money_in_hand() == balances[cash["id"]] + balances[bank["id"]]
+
+
+def test_wallet_balances_counts_transfers_and_adjustments(repo):
+    cash = repo.create_wallet("Cash", opening_balance=100_000, spendable=True)
+    bank = repo.create_wallet("Bank", opening_balance=0, spendable=True)
+
+    repo.create_transaction(30_000, "transfer", wallet_id=cash["id"], transfer_wallet_id=bank["id"])
+    balances = repo.wallet_balances()
+    assert balances[cash["id"]] == 70_000
+    assert balances[bank["id"]] == 30_000
+    # a transfer conserves the total across both wallets
+    assert balances[cash["id"]] + balances[bank["id"]] == 100_000
+
+    repo.create_transaction(5_000, "adjustment", wallet_id=cash["id"])
+    assert repo.wallet_balances()[cash["id"]] == 75_000
+
+
+def test_aggregate_results_are_plain_int_not_decimal(repo, period_id):
+    category = repo.create_category("Fuel", "variable", monthly_limit=70_000)
+    wallet = repo.create_wallet("Cash", opening_balance=100_000)
+    repo.create_transaction(15_000, "expense", category_id=category["id"], wallet_id=wallet["id"], period_id=period_id)
+
+    assert isinstance(repo.spend_by_category(category["id"], period_id), int)
+    assert isinstance(repo.wallet_balance(wallet["id"]), int)
+    assert isinstance(repo.money_in_hand(), int)
+    assert isinstance(repo.wallet_balances()[wallet["id"]], int)
+
+
+def test_get_transactions_list_includes_joined_names(repo, period_id):
+    category = repo.create_category("Fuel", "variable", monthly_limit=70_000)
+    wallet = repo.create_wallet("Cash", opening_balance=100_000)
+    repo.create_transaction(15_000, "expense", category_id=category["id"], wallet_id=wallet["id"], period_id=period_id)
+
+    items, _ = repo.get_transactions(period_id=period_id)
+    assert items[0]["category_name"] == "Fuel"
+    assert items[0]["wallet_name"] == "Cash"
+
+
+def test_get_transactions_list_uncategorized_row_not_dropped(repo, period_id):
+    repo.create_transaction(5_000, "expense", period_id=period_id)
+    items, total = repo.get_transactions(period_id=period_id)
+    assert total == 1
+    assert items[0]["category_name"] is None
+    assert items[0]["wallet_name"] is None

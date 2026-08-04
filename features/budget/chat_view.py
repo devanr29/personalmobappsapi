@@ -95,7 +95,7 @@ def build_chat_budget_payload(data: dict) -> dict:
             "remaining":          data["remaining"],
             "deductions":         data["total_deductions"],
             "free":               data["free_money"],
-            "dailyBudget":        data["daily_budget"],
+            "dailyBudget":        int(data["daily_budget"]),
             "daysToPayday":       data["days_left"],
             "statusLevel":        data["status_level"],
             "deductionBreakdown": deduction_breakdown,
