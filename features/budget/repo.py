@@ -471,6 +471,144 @@ def ensure_alert_prefs():
 
 
 # ================================================================
+# GOALS — sinking funds / savings targets. reserve_from_free drives
+# whether service.goal_reservations() folds this goal into
+# total_still_owed; contributions are tracked separately from the
+# reservation math so "how much has actually been set aside" and "how
+# much should still be reserved this period" never get conflated.
+# ================================================================
+_GOAL_COLS = (
+    "id, name, kind, target_amount, target_date, monthly_contribution, "
+    "reserve_from_free, wallet_id, archived, created_at"
+)
+
+
+def _goal_row(row):
+    return {
+        "id": row[0], "name": row[1], "kind": row[2], "target_amount": row[3],
+        "target_date": row[4], "monthly_contribution": row[5],
+        "reserve_from_free": bool(row[6]), "wallet_id": row[7],
+        "archived": bool(row[8]), "created_at": row[9],
+    }
+
+
+def create_goal(name, target_amount, kind="sinking", target_date=None,
+                monthly_contribution=None, reserve_from_free=True, wallet_id=None):
+    conn = db_conn()
+    cur = conn.execute(
+        "INSERT INTO budget_goals "
+        "(name, kind, target_amount, target_date, monthly_contribution, reserve_from_free, wallet_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, kind, target_amount, target_date, monthly_contribution,
+         int(reserve_from_free), wallet_id, str(now_jkt())),
+    )
+    goal_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return get_goal(goal_id)
+
+
+def get_goals(include_archived=False):
+    conn = db_conn()
+    where = "" if include_archived else "WHERE archived = 0"
+    sql = "SELECT " + _GOAL_COLS + " FROM budget_goals " + where + " ORDER BY id"
+    rows = conn.execute(sql).fetchall()
+    conn.close()
+    return [_goal_row(r) for r in rows]
+
+
+def get_goal(goal_id):
+    conn = db_conn()
+    sql = "SELECT " + _GOAL_COLS + " FROM budget_goals WHERE id = ?"
+    row = conn.execute(sql, (goal_id,)).fetchone()
+    conn.close()
+    return _goal_row(row) if row else None
+
+
+_GOAL_UPDATABLE = {
+    "name", "kind", "target_amount", "target_date", "monthly_contribution",
+    "reserve_from_free", "wallet_id", "archived",
+}
+_GOAL_BOOL_FIELDS = {"reserve_from_free", "archived"}
+
+
+def update_goal(goal_id, **fields):
+    if not fields:
+        return get_goal(goal_id)
+    sets, params = [], []
+    for key, value in fields.items():
+        if key not in _GOAL_UPDATABLE:
+            continue
+        if key in _GOAL_BOOL_FIELDS:
+            value = int(value)
+        sets.append(key + " = ?")
+        params.append(value)
+    if not sets:
+        return get_goal(goal_id)
+    params.append(goal_id)
+    conn = db_conn()
+    sql = "UPDATE budget_goals SET " + ", ".join(sets) + " WHERE id = ?"
+    conn.execute(sql, params)
+    conn.commit()
+    conn.close()
+    return get_goal(goal_id)
+
+
+def goal_in_use(goal_id) -> bool:
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT 1 FROM budget_goal_contributions WHERE goal_id = ? LIMIT 1", (goal_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def delete_goal(goal_id):
+    conn = db_conn()
+    conn.execute("DELETE FROM budget_goals WHERE id = ?", (goal_id,))
+    conn.commit()
+    conn.close()
+
+
+def goal_saved(goal_id) -> int:
+    """Total ever contributed to this goal, all-time."""
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM budget_goal_contributions WHERE goal_id = ?", (goal_id,)
+    ).fetchone()
+    conn.close()
+    return _int0(row[0])
+
+
+def goal_contributed_in_period(goal_id, start_date, end_date) -> int:
+    """Contributed within [start_date, end_date) — same half-open
+    convention as a budget period. occurred_at is TEXT; comparing against
+    a 10-char date bound works the same way date_from/date_to do
+    elsewhere (a bare date sorts before any same-day timestamp)."""
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM budget_goal_contributions "
+        "WHERE goal_id = ? AND occurred_at >= ? AND occurred_at < ?",
+        (goal_id, start_date, end_date),
+    ).fetchone()
+    conn.close()
+    return _int0(row[0])
+
+
+def create_goal_contribution(goal_id, transaction_id, amount, occurred_at):
+    conn = db_conn()
+    cur = conn.execute(
+        "INSERT INTO budget_goal_contributions (goal_id, transaction_id, amount, occurred_at) "
+        "VALUES (?, ?, ?, ?)",
+        (goal_id, transaction_id, amount, occurred_at),
+    )
+    contribution_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return contribution_id
+
+
+# ================================================================
 # TRANSACTIONS
 # ================================================================
 _TXN_COLS = (

@@ -162,3 +162,38 @@ def test_breakdown_includes_today_block(client, auth_headers):
     body = resp.get_json()["data"]
     if body is not None:
         assert "today" in body
+
+
+def test_goal_crud_and_contribute_routes(client, auth_headers):
+    wallet = repo.create_wallet("_HttpGoalWallet", opening_balance=500_000, is_default=False)
+    try:
+        resp = client.post(
+            "/api/budget/goals", headers=auth_headers,
+            json={"name": "_HttpGoal", "targetAmount": 1_000_000, "monthlyContribution": 100_000},
+        )
+        assert resp.status_code == 201
+        goal = resp.get_json()["data"]["goal"]
+        assert goal["saved"] == 0
+
+        resp = client.get("/api/budget/goals", headers=auth_headers)
+        assert any(g["id"] == goal["id"] for g in resp.get_json()["data"]["items"])
+
+        resp = client.post(
+            f"/api/budget/goals/{goal['id']}/contribute", headers=auth_headers,
+            json={"amount": 50_000, "walletId": wallet["id"]},
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["data"]["goal"]["saved"] == 50_000
+
+        resp = client.delete(f"/api/budget/goals/{goal['id']}", headers=auth_headers)
+        assert resp.status_code == 409  # has a contribution
+    finally:
+        conn = _teardown_conn()
+        row = conn.execute("SELECT id FROM budget_goals WHERE name = '_HttpGoal'").fetchone()
+        if row:
+            conn.execute("DELETE FROM budget_goal_contributions WHERE goal_id = ?", (row[0],))
+            conn.execute("DELETE FROM budget_transactions WHERE goal_id = ?", (row[0],))
+            conn.execute("DELETE FROM budget_goals WHERE id = ?", (row[0],))
+        conn.execute("DELETE FROM budget_wallets WHERE id = ?", (wallet["id"],))
+        conn.commit()
+        conn.close()

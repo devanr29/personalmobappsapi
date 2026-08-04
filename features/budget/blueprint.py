@@ -8,7 +8,7 @@ from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_
 from features.budget import repo, service
 from features.budget.errors import BudgetError
 from features.budget.serializers import (
-    camel_bill, camel_budget_breakdown, camel_category, camel_seed_result, camel_transaction, camel_wallet,
+    camel_bill, camel_budget_breakdown, camel_category, camel_goal, camel_seed_result, camel_transaction, camel_wallet,
 )
 
 budget_bp = Blueprint("budget", __name__)
@@ -345,3 +345,62 @@ def transactions_edit(txn_id):
 def transactions_delete(txn_id):
     txn, summary = service.delete_transaction(txn_id)
     return ok({"id": txn_id, "deleted": True, "summary": summary})
+
+
+# ================================================================
+# GOALS
+# ================================================================
+@budget_bp.route("/goals", methods=["GET"])
+def goals_list():
+    include_archived = bool(request.args.get("includeArchived"))
+    goals = repo.get_goals(include_archived=include_archived)
+    return ok({"items": [{**camel_goal(g), "saved": repo.goal_saved(g["id"])} for g in goals]})
+
+
+@budget_bp.route("/goals", methods=["POST"])
+def goals_create():
+    body = request.get_json(silent=True) or {}
+    if "name" not in body or "targetAmount" not in body:
+        return err("VALIDATION_ERROR", "name and targetAmount are required.", 400)
+    goal = service.create_goal(
+        body["name"], body["targetAmount"], kind=body.get("kind", "sinking"),
+        target_date=body.get("targetDate"), monthly_contribution=body.get("monthlyContribution"),
+        reserve_from_free=body.get("reserveFromFree", True), wallet_id=body.get("walletId"),
+    )
+    return ok({"goal": {**camel_goal(goal), "saved": 0}}, status=201)
+
+
+@budget_bp.route("/goals/<int:goal_id>", methods=["PATCH"])
+def goals_edit(goal_id):
+    body = request.get_json(silent=True) or {}
+    fields = {}
+    for camel, snake in (
+        ("name", "name"), ("kind", "kind"), ("targetAmount", "target_amount"),
+        ("targetDate", "target_date"), ("monthlyContribution", "monthly_contribution"),
+        ("reserveFromFree", "reserve_from_free"), ("walletId", "wallet_id"), ("archived", "archived"),
+    ):
+        if camel in body:
+            fields[snake] = body[camel]
+    goal = service.update_goal(goal_id, **fields)
+    return ok({"goal": {**camel_goal(goal), "saved": repo.goal_saved(goal_id)}})
+
+
+@budget_bp.route("/goals/<int:goal_id>", methods=["DELETE"])
+def goals_delete(goal_id):
+    service.delete_goal(goal_id)
+    return ok({"id": goal_id, "deleted": True})
+
+
+@budget_bp.route("/goals/<int:goal_id>/contribute", methods=["POST"])
+def goals_contribute(goal_id):
+    body = request.get_json(silent=True) or {}
+    if "amount" not in body:
+        return err("VALIDATION_ERROR", "amount is required.", 400)
+    result, summary = service.contribute_to_goal(
+        goal_id, body["amount"], wallet_id=body.get("walletId"), occurred_at=body.get("occurredAt"),
+    )
+    return ok({
+        "goal": {**camel_goal(result["goal"]), "saved": result["saved"]},
+        "transaction": camel_transaction(result["transaction"]) if result["transaction"] else None,
+        "summary": summary,
+    }, status=201)

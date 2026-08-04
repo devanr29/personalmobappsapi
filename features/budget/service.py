@@ -68,9 +68,46 @@ def build_period_view():
         paid_bill_ids=paid_bill_ids,
         spend_by_category_id=spend_by_category_id,
         unmatched_spending=unmatched_spending,
+        goal_reservations=goal_reservations(period),
     )
     data["period_id"] = period["id"]
     return data
+
+
+def _months_between(from_date: datetime.date, to_date: datetime.date) -> int:
+    """Whole calendar months from from_date to to_date, at least 1 — used
+    to spread a goal's remaining target across its remaining runway when
+    no explicit monthly_contribution is set."""
+    months = (to_date.year - from_date.year) * 12 + (to_date.month - from_date.month)
+    return max(months, 1)
+
+
+def goal_reservations(period) -> list:
+    """One reservation per active goal with reserve_from_free=1, net of
+    what's already been contributed THIS period — a contribution already
+    moved money out of the spendable wallets (if the goal has one), so
+    reserving it again would double-count. Empty goals list -> empty
+    reservations -> compute_budget_by_id's total_still_owed is unchanged,
+    which is what keeps this a strict addition rather than a behavior
+    change for ledgers with no goals."""
+    out = []
+    today = now_jkt().date()
+    for g in repo.get_goals(include_archived=False):
+        if not g["reserve_from_free"]:
+            continue
+        monthly = g["monthly_contribution"]
+        if monthly is None:
+            if not g["target_date"]:
+                continue
+            remaining_target = max(g["target_amount"] - repo.goal_saved(g["id"]), 0)
+            target_date = datetime.date.fromisoformat(g["target_date"])
+            months = _months_between(today, target_date)
+            monthly = -(-remaining_target // months)  # ceil division
+        already = repo.goal_contributed_in_period(g["id"], period["start_date"], period["end_date"])
+        amount = max(monthly - already, 0)
+        if amount > 0:
+            out.append({"name": g["name"], "amount": amount})
+    return out
 
 
 def get_summary():
@@ -655,3 +692,88 @@ def build_insights_history(periods: int = 6, group_by: str = "period"):
         "deltaVsPrevious": delta,
         "averageSpend": average_spend,
     }
+
+
+# ================================================================
+# GOALS
+# ================================================================
+_VALID_GOAL_KINDS = {"sinking", "debt", "emergency"}
+
+
+def create_goal(name, target_amount, kind="sinking", target_date=None,
+                monthly_contribution=None, reserve_from_free=True, wallet_id=None):
+    if not name or not name.strip():
+        raise BudgetValidationError("name is required.")
+    if not isinstance(target_amount, (int, float)) or target_amount <= 0:
+        raise BudgetValidationError("targetAmount must be a positive number.")
+    if kind not in _VALID_GOAL_KINDS:
+        raise BudgetValidationError(f"kind must be one of {sorted(_VALID_GOAL_KINDS)}.")
+    if wallet_id is not None and repo.get_wallet(wallet_id) is None:
+        raise BudgetValidationError(f"Unknown walletId {wallet_id}.")
+    return repo.create_goal(
+        name.strip(), int(target_amount), kind=kind, target_date=target_date,
+        monthly_contribution=monthly_contribution, reserve_from_free=reserve_from_free, wallet_id=wallet_id,
+    )
+
+
+def update_goal(goal_id, **fields):
+    if repo.get_goal(goal_id) is None:
+        raise BudgetNotFound(f"No goal with id {goal_id}.")
+    if "kind" in fields and fields["kind"] not in _VALID_GOAL_KINDS:
+        raise BudgetValidationError(f"kind must be one of {sorted(_VALID_GOAL_KINDS)}.")
+    if fields.get("wallet_id") is not None and repo.get_wallet(fields["wallet_id"]) is None:
+        raise BudgetValidationError(f"Unknown walletId {fields['wallet_id']}.")
+    return repo.update_goal(goal_id, **fields)
+
+
+def delete_goal(goal_id):
+    if repo.get_goal(goal_id) is None:
+        raise BudgetNotFound(f"No goal with id {goal_id}.")
+    if repo.goal_in_use(goal_id):
+        raise BudgetConflict("This goal has contributions — archive it instead of deleting it.")
+    repo.delete_goal(goal_id)
+
+
+def get_goal_progress(goal_id):
+    goal = repo.get_goal(goal_id)
+    if goal is None:
+        raise BudgetNotFound(f"No goal with id {goal_id}.")
+    saved = repo.goal_saved(goal_id)
+    return goal, saved
+
+
+def contribute_to_goal(goal_id, amount, wallet_id=None, occurred_at=None):
+    """If the goal has a wallet (ideally created spendable=False, a real
+    sinking-fund account), the contribution is a transfer out of a
+    spendable wallet — money_in_hand() drops by `amount`, and because
+    goal_reservations() nets contributions already made this period off
+    the reservation, free_money moves by exactly zero: the money was
+    already being held back, this just makes the holding concrete. If the
+    goal has no wallet, this is bookkeeping-only — no cash movement, just
+    progress tracking toward target_amount."""
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise BudgetValidationError("amount must be a positive number.")
+    goal = repo.get_goal(goal_id)
+    if goal is None:
+        raise BudgetNotFound(f"No goal with id {goal_id}.")
+
+    txn = None
+    if goal["wallet_id"] is not None:
+        source_wallet_id = wallet_id or (repo.get_default_wallet() or {}).get("id")
+        if source_wallet_id is None:
+            raise BudgetValidationError("No source walletId given and no default wallet configured.")
+        if source_wallet_id == goal["wallet_id"]:
+            raise BudgetValidationError("Source wallet cannot be the goal's own wallet.")
+        period = ensure_current_period(get_payroll_day())
+        txn = repo.create_transaction(
+            amount=int(amount), direction="transfer", wallet_id=source_wallet_id,
+            transfer_wallet_id=goal["wallet_id"], period_id=period["id"], goal_id=goal["id"],
+            note=f"Contribution to {goal['name']}", source="manual",
+            occurred_at=_normalize_occurred_at(occurred_at),
+        )
+
+    repo.create_goal_contribution(
+        goal_id, txn["id"] if txn else None, int(amount),
+        _normalize_occurred_at(occurred_at) or str(now_jkt()),
+    )
+    return {"goal": repo.get_goal(goal_id), "transaction": txn, "saved": repo.goal_saved(goal_id)}, get_summary()

@@ -58,6 +58,14 @@ def camel_transaction(t: dict) -> dict:
     }
 
 
+def camel_goal(g: dict) -> dict:
+    return {
+        "id": g["id"], "name": g["name"], "kind": g["kind"], "targetAmount": g["target_amount"],
+        "targetDate": g["target_date"], "monthlyContribution": g["monthly_contribution"],
+        "reserveFromFree": g["reserve_from_free"], "walletId": g["wallet_id"], "archived": g["archived"],
+    }
+
+
 def camel_seed_result(result: dict) -> dict:
     return {
         "wallets": [camel_wallet(w) for w in result["wallets"]],
