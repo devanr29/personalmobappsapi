@@ -1,11 +1,10 @@
-import sqlite3, datetime, re, json
+import datetime, re, json
 from googleapiclient.errors import HttpError
 from config import now_jkt, localize_jkt
+from db import db_conn
 from google_auth import get_google_services
 from ai.groq_client import groq_complete
 from tracer import trace
-
-DB_PATH = "bot.db"
 
 # ================================================================
 # AI EVENT PARSER
@@ -86,7 +85,7 @@ def save_event(title: str, start_dt: str, end_dt: str = None, description: str =
         datetime.datetime.strptime(start_dt, "%Y-%m-%d %H:%M") + datetime.timedelta(hours=1)
     ).strftime("%Y-%m-%d %H:%M")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     conn.execute("INSERT INTO reminders (content, remind_at) VALUES (?, ?)", (title, start_dt))
     conn.commit()
     conn.close()

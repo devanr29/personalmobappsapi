@@ -1,18 +1,16 @@
-import sqlite3
 from config import now_jkt, SPREADSHEET_ID, MAX_LIST_ITEMS
+from db import db_conn
 from google_auth import get_google_services
 from features.memory import save_embedding, delete_embedding, update_embedding
 from features.utils import slice_data_rows, has_header_row
 from tracer import trace, logger
-
-DB_PATH = "bot.db"
 
 # ================================================================
 # SAVE
 # ================================================================
 @trace
 def save_idea(text: str) -> str:
-    conn      = sqlite3.connect(DB_PATH)
+    conn      = db_conn()
     cursor    = conn.execute(
         "INSERT INTO ideas (content, timestamp) VALUES (?, ?)",
         (text, str(now_jkt()))
@@ -65,7 +63,7 @@ def get_ideas(range_start=None, range_end=None, count=None, range_all=False) -> 
             )
         return "\n".join(lines)
     except Exception:
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         rows = conn.execute("SELECT content, timestamp FROM ideas ORDER BY id DESC LIMIT 10").fetchall()
         conn.close()
         if not rows:
@@ -141,7 +139,7 @@ def delete_idea(keyword: str = None, index: int = None) -> str:
             }}}]},
         ).execute()
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         row  = conn.execute(
             "SELECT id FROM ideas WHERE content = ? ORDER BY id LIMIT 1", (deleted_text,)
         ).fetchone()
@@ -197,7 +195,7 @@ def edit_idea(new_content: str, keyword: str = None, index: int = None) -> str:
         ).execute()
 
         old_text = data_rows[target_i][1]
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         row  = conn.execute(
             "SELECT id FROM ideas WHERE content = ? ORDER BY id LIMIT 1", (old_text,)
         ).fetchone()

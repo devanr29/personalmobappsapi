@@ -1,9 +1,7 @@
-import hmac
 import json
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request
 
-from config import MOBILE_API_TOKEN
 from database import clear_conv_history, save_conv_turn, state_get
 from ai.classifier import classify_intent
 from intents import route_intent
@@ -24,6 +22,7 @@ from features.reminders import (
 from features.notes import get_notes_structured, save_note, edit_note, delete_note
 from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_idea
 from features.budget import compute_and_persist_budget
+from features.budget.service import get_summary as get_budget_summary
 from features.budget_config import (
     get_fixed_expenses,
     get_variable_budgets,
@@ -40,33 +39,9 @@ from ai.brainstorm import ai_brainstorm
 from features.memory import semantic_search
 from push import register_push_token
 from tracer import logger
+from api_common import ok as _ok, err as _err, add_cors_headers as _add_cors_headers, check_auth as _http_check_auth, handle_unexpected_error as _http_handle_unexpected_error
 
 api_bp = Blueprint("api", __name__)
-
-
-# ================================================================
-# RESPONSE ENVELOPE
-# ================================================================
-def _ok(data, status=200):
-    return jsonify({"data": data, "meta": {}}), status
-
-
-def _err(code, message, status):
-    return jsonify({"error": {"code": code, "message": message}, "meta": {}}), status
-
-
-# ================================================================
-# CORS — needed for the Expo *web* build, which runs in the browser
-# at a different origin (localhost:8081) than the API. Native (Expo
-# Go / device) fetches have no origin and are unaffected. Token auth
-# rides in the Authorization header (not cookies), so a wildcard
-# origin is safe — we're not using credentialed requests.
-# ================================================================
-def _add_cors_headers(resp):
-    resp.headers["Access-Control-Allow-Origin"]  = "*"
-    resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
-    return resp
 
 
 @api_bp.after_request
@@ -74,28 +49,14 @@ def _cors(resp):
     return _add_cors_headers(resp)
 
 
-# ================================================================
-# AUTH — bearer token, constant-time compare (avoids a timing
-# side-channel on a URL that's publicly reachable on Railway)
-# ================================================================
 @api_bp.before_request
 def _check_auth():
-    # CORS preflight carries no Authorization header — let Flask's
-    # automatic OPTIONS handler answer it; after_request adds headers.
-    if request.method == "OPTIONS":
-        return None
-    if request.path == "/api/health":
-        return None
-    auth  = request.headers.get("Authorization", "")
-    token = auth[7:] if auth.startswith("Bearer ") else ""
-    if not MOBILE_API_TOKEN or not hmac.compare_digest(token, MOBILE_API_TOKEN):
-        return _err("UNAUTHORIZED", "Missing or invalid bearer token.", 401)
+    return _http_check_auth(exempt_paths={"/api/health"})
 
 
 @api_bp.errorhandler(Exception)
 def _handle_unexpected_error(e):
-    logger.warning(f"[api] unhandled error: {e}")
-    return _err("INTERNAL_ERROR", "Something went wrong.", 500)
+    return _http_handle_unexpected_error(e, tag="api")
 
 
 # ================================================================
@@ -111,12 +72,11 @@ def health():
 # ================================================================
 @api_bp.route("/home", methods=["GET"])
 def home():
-    events     = get_events_structured()
-    snapshot   = state_get("last_budget_snapshot")
+    events = get_events_structured()
     return _ok({
         "tasks":         get_tasks_structured(),
         "nextEvent":      events[0] if events else None,
-        "budgetSummary":  json.loads(snapshot) if snapshot else None,
+        "budgetSummary":  get_budget_summary(),
         "reminders":      get_reminders_structured(limit=2),
         "quoteOfDay":     get_quote_of_day(),
     })
@@ -336,14 +296,12 @@ def ideas_delete(index):
 
 
 # ================================================================
-# BUDGET
+# BUDGET — GET /budget and GET /budget/breakdown moved to the standalone
+# features/budget blueprint (registered at /api/budget in app.py), now
+# derived live from the ledger. POST here is the legacy whole-state NL
+# parser; still active through Phase 2 so the pre-rebuild mobile screen
+# keeps working, removed in B2.4 once the ledger fully replaces it.
 # ================================================================
-@api_bp.route("/budget", methods=["GET"])
-def budget_get():
-    snapshot = state_get("last_budget_snapshot")
-    return _ok(json.loads(snapshot) if snapshot else None)
-
-
 @api_bp.route("/budget", methods=["POST"])
 def budget_post():
     body    = request.get_json(silent=True) or {}
@@ -357,44 +315,6 @@ def budget_post():
 
     snapshot = state_get("last_budget_snapshot")
     return _ok(json.loads(snapshot))
-
-
-def _camel_budget_breakdown(data: dict) -> dict:
-    # _compute_budget() builds a snake_case dict — normalize to camelCase
-    # like every other structured endpoint (get_events_structured,
-    # get_notes_structured, the /api/search fix, etc.) rather than leaking
-    # Python naming into the mobile client.
-    return {
-        "remaining": data["remaining"],
-        "stillOwed": [
-            {"name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")} for e in data["still_owed"]
-        ],
-        "pendingAmounts": [
-            {"name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")} for e in data["pending_amounts"]
-        ],
-        "remainingVar": [
-            {"name": v["name"], "remaining": v["remaining"], "spent": v["spent"], "overBudget": v["over_budget"]}
-            for v in data["remaining_var"]
-        ],
-        "unmatchedSpending": [{"name": u["name"], "amount": u["amount"]} for u in data["unmatched_spending"]],
-        "totalStillOwed": data["total_still_owed"],
-        "totalVarRemaining": data["total_var_remaining"],
-        "totalDeductions": data["total_deductions"],
-        "freeMoney": data["free_money"],
-        "dailyBudget": data["daily_budget"],
-        "daysLeft": data["days_left"],
-        "statusLevel": data["status_level"],
-    }
-
-
-@api_bp.route("/budget/breakdown", methods=["GET"])
-def budget_breakdown_get():
-    # Read-through only — compute_and_persist_budget() (chat's budget intent
-    # or POST /api/budget above) is what refreshes this; there is no
-    # standalone recompute here, since _compute_budget() needs the same
-    # freeform NL message either route already requires.
-    breakdown = state_get("last_budget_breakdown")
-    return _ok(_camel_budget_breakdown(json.loads(breakdown)) if breakdown else None)
 
 
 # ================================================================

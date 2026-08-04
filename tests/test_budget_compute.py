@@ -1,6 +1,10 @@
-from unittest.mock import patch
-
-from features.budget import _compute_budget, _format_budget
+"""Regression suite for the pure compute_budget() function — successor to
+tests/test_budget_deductions.py, which guarded the same invariants against
+the pre-extraction _compute_budget via three unittest.mock patches. Since
+compute_budget() takes its inputs as plain arguments, there is nothing left
+to mock; the assertions below are carried over character-identical."""
+from features.budget.compute import compute_budget
+from features.budget.legacy_chat import _format_budget
 
 FIXED = [
     {"name": "House Rent", "amount": 955_000, "due_day": 25},
@@ -13,23 +17,21 @@ VARIABLE = [
     {"name": "Claude", "budget": 400_000},
 ]
 
+DAYS_LEFT = 20  # pinned constant — no assertion below reads days_left/daily_budget's exact value
 
-def _parsed(**overrides):
-    base = {
+
+def _run(**overrides):
+    kwargs = {
+        "days_left": DAYS_LEFT,
         "remaining_money": 3_254_624,
+        "fixed_expenses": FIXED,
+        "variable_budgets": VARIABLE,
         "paid_fixed": ["House Rent", "Zakat"],
         "spent_variable": {"Claude": 400_000, "Ticket to go home": 300_000, "Tidak terduga": 580_972},
         "pending_conditional": [],
     }
-    base.update(overrides)
-    return base
-
-
-def _run(**parsed_overrides):
-    with patch("features.budget.get_variable_budgets", return_value=VARIABLE), \
-         patch("features.budget.get_fixed_expenses", return_value=FIXED), \
-         patch("features.budget._parse_budget_input", return_value=_parsed(**parsed_overrides)):
-        return _compute_budget("irrelevant, parser is mocked")
+    kwargs.update(overrides)
+    return compute_budget(**kwargs)
 
 
 def test_fully_spent_category_still_appears_instead_of_vanishing():
@@ -88,3 +90,14 @@ def test_no_unmatched_section_when_everything_matches():
     assert data["unmatched_spending"] == []
     text = _format_budget(data)
     assert "not tracked" not in text.lower()
+
+
+def test_days_left_zero_does_not_divide_by_zero():
+    data = _run(days_left=0)
+    assert data["daily_budget"] == data["free_money"]
+
+
+def test_empty_goal_reservations_reproduces_the_pre_goals_numbers():
+    baseline = _run()
+    with_empty_goals = _run(goal_reservations=[])
+    assert with_empty_goals == baseline

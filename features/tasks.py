@@ -1,17 +1,15 @@
-import sqlite3
 from googleapiclient.errors import HttpError
 from config import now_jkt, MAX_LIST_ITEMS
+from db import db_conn
 from google_auth import get_google_services
 from tracer import trace, logger
-
-DB_PATH = "bot.db"
 
 # ================================================================
 # SAVE
 # ================================================================
 @trace
 def save_task(text: str) -> str:
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     conn.execute("INSERT INTO tasks (content, timestamp) VALUES (?, ?)", (text, str(now_jkt())))
     conn.commit()
     conn.close()
@@ -67,7 +65,7 @@ def get_tasks(range_start=None, range_end=None, count=None, range_all=False) -> 
             )
         return "\n".join(lines)
     except Exception:
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         rows = conn.execute("SELECT content FROM tasks WHERE done=0 ORDER BY id DESC LIMIT 10").fetchall()
         conn.close()
         if not rows:
@@ -172,7 +170,7 @@ def delete_task(keyword: str = None, index: int = None) -> str:
 
         tasks_svc.tasks().delete(tasklist="@default", task=target["id"]).execute()
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         row  = conn.execute(
             "SELECT id FROM tasks WHERE content = ? ORDER BY id LIMIT 1", (target["title"],)
         ).fetchone()
@@ -216,7 +214,7 @@ def edit_task(new_title: str, keyword: str = None, index: int = None) -> str:
         ).execute()
 
         old_title = target["title"]
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         row  = conn.execute(
             "SELECT id FROM tasks WHERE content = ? ORDER BY id LIMIT 1", (old_title,)
         ).fetchone()

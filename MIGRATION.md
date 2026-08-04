@@ -8,7 +8,7 @@ Two independent components living side by side, plus one static reference app:
 
 | Component | Path | Stack | Purpose |
 |---|---|---|---|
-| Backend bot/API | root (`api.py`, `app.py`, `features/`, `ai/`) | Python (Flask, APScheduler, Google APIs, Groq, Gemini) | Personal assistant backend: budget, calendar, notes, tasks, reminders, ideas, quotes, news, AI chat/classifier. Uses SQLite (`bot.db`) + optional `DATABASE_URL` (Postgres). |
+| Backend bot/API | root (`api.py`, `app.py`, `features/`, `ai/`) | Python (Flask, APScheduler, Google APIs, Groq, Gemini) | Personal assistant backend: budget, calendar, notes, tasks, reminders, ideas, quotes, news, AI chat/classifier. Uses Postgres when `DATABASE_URL` is set (all DB access goes through `db.py`'s adapter); falls back to local SQLite (`bot.db`) otherwise, which is also what the test suite uses by default. |
 | Mobile app | `mobile/` | Expo / React Native (Expo SDK 57, TypeScript) | Client app that talks to the Flask backend via `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_API_TOKEN`. Has its own **local git repo, no remote configured**. |
 | Design reference | `design_handoff_assistant_app/` | Static HTML/JSX mockup | Design handoff artifact, not part of the running app. |
 

@@ -2,6 +2,8 @@ import re, json, calendar as _calendar
 from config import now_jkt, PAYROLL_DAY
 from database import state_set
 from features.budget_config import get_fixed_expenses, get_variable_budgets
+from features.budget.compute import compute_budget
+from features.budget.periods import days_to_payday
 from ai.groq_client import groq_complete
 from tracer import trace
 
@@ -76,22 +78,19 @@ def _budget_interactive_prompt() -> str:
     return "\n".join(lines)
 
 # ================================================================
-# COMPUTE — pure data, no formatting (used by chat text output,
-# the persisted Home snapshot, and the future REST API alike)
+# COMPUTE — thin wrapper around the pure features.budget.compute module.
+# Handles the bare-trigger short-circuit, the LLM parse of the freeform
+# message, and gathering Sheets-backed config, then delegates all the
+# actual math to compute_budget() (used by chat text output, the
+# persisted Home snapshot, and the REST API alike).
 # ================================================================
 @trace
 def _compute_budget(user_input: str) -> dict | None:
     """Returns the full budget breakdown as a dict, or None if the input
     was a bare trigger phrase or couldn't be parsed (caller should fall
     back to _budget_interactive_prompt() in either case)."""
-    now   = now_jkt()
-    today = now.day
-
-    if today <= PAYROLL_DAY:
-        days_left = PAYROLL_DAY - today
-    else:
-        days_in_month = _calendar.monthrange(now.year, now.month)[1]
-        days_left = (days_in_month - today) + PAYROLL_DAY
+    now = now_jkt()
+    days_left = days_to_payday(now.day, PAYROLL_DAY, _calendar.monthrange(now.year, now.month)[1])
 
     bare_triggers = {"budget", "hitung budget", "kalkulasi budget", "budget calculator",
                      "budget harian", "sisa budget", "budget check"}
@@ -102,90 +101,15 @@ def _compute_budget(user_input: str) -> dict | None:
     if not parsed or parsed.get("remaining_money") is None:
         return None
 
-    fixed_expenses   = get_fixed_expenses()
-    variable_budgets = get_variable_budgets()
-    remaining      = parsed.get("remaining_money", 0)
-    paid_fixed     = [n.lower() for n in (parsed.get("paid_fixed") or [])]
-    spent_variable = {k.lower(): v for k, v in (parsed.get("spent_variable") or {}).items()}
-    pending_cond   = [n.lower() for n in (parsed.get("pending_conditional") or [])]
-
-    still_owed = [
-        exp for exp in fixed_expenses
-        if not any(exp["name"].lower() in p or p in exp["name"].lower() for p in paid_fixed)
-    ]
-
-    # Every configured variable budget is included here, even when fully
-    # spent or overspent — a strict "leftover > 0" filter used to drop a
-    # category the moment spend caught up with its cap (e.g. spent exactly
-    # equal to budget), silently disappearing it from the breakdown instead
-    # of showing "Rp 0 remaining". remaining is clamped to >= 0 so an
-    # overspend can't reduce total_deductions below what's actually still
-    # owed; the overspend itself is reported separately for visibility.
-    remaining_var  = []
-    matched_spend_keys = set()
-    for var in variable_budgets:
-        name_lower = var["name"].lower()
-        spent = 0
-        for k, v in spent_variable.items():
-            if name_lower in k or k in name_lower:
-                spent = v
-                matched_spend_keys.add(k)
-                break
-        leftover = var["budget"] - spent
-        remaining_var.append({
-            "name": var["name"],
-            "remaining": max(leftover, 0),
-            "spent": spent,
-            "over_budget": max(-leftover, 0),
-        })
-
-    # spent_variable entries that matched no configured fixed/variable name
-    # (e.g. a one-off category like "Claude") — surfaced so the amount
-    # doesn't silently vanish from the breakdown. Not added to
-    # total_deductions: remaining_money is already net of this spend, and
-    # there's no ongoing budget line to reserve for it going forward.
-    original_spent = parsed.get("spent_variable") or {}
-    unmatched_spending = [
-        {"name": name, "amount": amount}
-        for name, amount in original_spent.items()
-        if name.lower() not in matched_spend_keys
-    ]
-
-    pending_amounts = [
-        exp for exp in fixed_expenses
-        if any(exp["name"].lower() in p or p in exp["name"].lower() for p in pending_cond)
-        and not any(e["name"].lower() == exp["name"].lower() for e in still_owed)
-    ]
-
-    total_still_owed    = sum(e["amount"] for e in still_owed) + sum(e["amount"] for e in pending_amounts)
-    total_var_remaining = sum(v["remaining"] for v in remaining_var)
-    total_deductions    = total_still_owed + total_var_remaining
-    free_money          = remaining - total_deductions
-    daily_budget        = free_money / days_left if days_left > 0 else free_money
-
-    if daily_budget < 0:
-        status_level = "short"
-    elif daily_budget < 50_000:
-        status_level = "tight"
-    elif daily_budget < 100_000:
-        status_level = "manageable"
-    else:
-        status_level = "comfortable"
-
-    return {
-        "remaining": remaining,
-        "still_owed": still_owed,
-        "pending_amounts": pending_amounts,
-        "remaining_var": remaining_var,
-        "unmatched_spending": unmatched_spending,
-        "total_still_owed": total_still_owed,
-        "total_var_remaining": total_var_remaining,
-        "total_deductions": total_deductions,
-        "free_money": free_money,
-        "daily_budget": daily_budget,
-        "days_left": days_left,
-        "status_level": status_level,
-    }
+    return compute_budget(
+        days_left=days_left,
+        remaining_money=parsed.get("remaining_money", 0),
+        fixed_expenses=get_fixed_expenses(),
+        variable_budgets=get_variable_budgets(),
+        paid_fixed=parsed.get("paid_fixed"),
+        spent_variable=parsed.get("spent_variable"),
+        pending_conditional=parsed.get("pending_conditional"),
+    )
 
 # ================================================================
 # FORMAT — turns a _compute_budget() dict into the chat-facing string

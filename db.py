@@ -1,0 +1,97 @@
+"""Dialect-neutral DB connection layer.
+
+Uses Postgres when DATABASE_URL is set, else falls back to local SQLite
+(DB_PATH). Every other module should get its connection from db_conn()
+instead of calling sqlite3.connect() directly.
+"""
+import os
+import sqlite3
+
+DB_PATH = os.environ.get("DB_PATH", "bot.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+IS_PG = bool(DATABASE_URL)
+
+if IS_PG:
+    import psycopg2
+
+
+def q(sql: str) -> str:
+    """Translate a sqlite-style '?' placeholder query to the active dialect."""
+    return sql.replace("?", "%s") if IS_PG else sql
+
+
+class _PGCursor:
+    """Thin proxy around a psycopg2 cursor that adds a writable .lastrowid —
+    psycopg2's own cursor exposes .lastrowid as a read-only C-level
+    attribute, so it can't be set directly after an INSERT."""
+
+    def __init__(self, cur, lastrowid=None):
+        self._cur = cur
+        self.lastrowid = lastrowid
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
+class _PGConn:
+    """Wraps a psycopg2 connection so call sites can keep using the
+    sqlite3.Connection shortcuts this codebase relies on everywhere:
+    conn.execute(sql, params) returning a cursor with .lastrowid,
+    conn.commit(), conn.close()."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        cur = self._conn.cursor()
+        cur.execute(q(sql), params)
+        return _PGCursor(cur, _pg_lastrowid(cur, sql))
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+def _pg_lastrowid(cur, sql):
+    """Emulates sqlite3's cursor.lastrowid after an INSERT into a
+    SERIAL/BIGSERIAL column. Relies on nothing else calling nextval()
+    between the INSERT and this call within the same connection.
+
+    lastval() raises ObjectNotInPrerequisiteState when the INSERT's table
+    has no sequence-backed column (e.g. bot_state's TEXT primary key) —
+    on a table with no sequence at all, or on the first statement of a
+    fresh connection before any nextval() has run. Without a SAVEPOINT,
+    that error aborts the whole transaction, and the caller's following
+    conn.commit() then silently discards the INSERT with no exception
+    raised — verified against a live Postgres instance. The SAVEPOINT
+    contains the failure to just this probe."""
+    if sql.strip().upper().startswith("INSERT"):
+        try:
+            cur.execute("SAVEPOINT _lastrowid_probe")
+            cur.execute("SELECT lastval()")
+            value = cur.fetchone()[0]
+            cur.execute("RELEASE SAVEPOINT _lastrowid_probe")
+            return value
+        except Exception:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT _lastrowid_probe")
+            except Exception:
+                pass
+            return None
+    return None
+
+
+def db_conn():
+    """Return a connection: Postgres when DATABASE_URL is set, else SQLite."""
+    if IS_PG:
+        return _PGConn(psycopg2.connect(DATABASE_URL))
+    conn = sqlite3.connect(DB_PATH)
+    # ON DELETE SET NULL / CASCADE (used by the budget schema's foreign
+    # keys) are silently inert on SQLite unless this is set per-connection.
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn

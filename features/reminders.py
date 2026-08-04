@@ -1,11 +1,9 @@
-import sqlite3, datetime
+import datetime
 from config import now_jkt, localize_jkt
+from db import db_conn
 from google_auth import get_google_services
 from ai.groq_client import groq_complete
 from tracer import trace
-
-
-DB_PATH = "bot.db"
 
 # ================================================================
 # AI REMINDER PARSER
@@ -59,7 +57,7 @@ User message: {user_input}"""
 # ================================================================
 @trace
 def save_reminder(text: str, remind_at: str) -> str:
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     conn.execute("INSERT INTO reminders (content, remind_at) VALUES (?, ?)", (text, remind_at))
     conn.commit()
     conn.close()
@@ -92,7 +90,7 @@ def save_reminder(text: str, remind_at: str) -> str:
 # ================================================================
 @trace
 def get_reminders_list(date_hint: str = None) -> str:
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     now  = now_jkt()
     if date_hint:
         try:
@@ -131,7 +129,7 @@ def get_reminders_list(date_hint: str = None) -> str:
 # ================================================================
 @trace
 def get_reminders_structured(limit: int = 10) -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     now  = now_jkt()
     rows = conn.execute(
         "SELECT id, content, remind_at FROM reminders WHERE remind_at >= ? AND done=0 ORDER BY remind_at LIMIT ?",
@@ -146,7 +144,7 @@ def get_reminders_structured(limit: int = 10) -> list[dict]:
 @trace
 def delete_reminder(keyword: str) -> str:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = db_conn()
         rows = conn.execute(
             "SELECT id, content, remind_at FROM reminders WHERE done=0 AND content LIKE ?",
             (f"%{keyword}%",)
@@ -190,7 +188,7 @@ def delete_reminder(keyword: str) -> str:
 # ================================================================
 @trace
 def delete_reminder_by_id(reminder_id: int) -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     row  = conn.execute(
         "SELECT id, content FROM reminders WHERE id = ?", (reminder_id,)
     ).fetchone()
@@ -232,7 +230,7 @@ def check_and_send_reminders():
     now    = now_jkt()
     win_lo = (now - datetime.timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M")
     win_hi = (now + datetime.timedelta(seconds=59)).strftime("%Y-%m-%d %H:%M")
-    conn   = sqlite3.connect(DB_PATH)
+    conn   = db_conn()
     rows   = conn.execute(
         "SELECT id, content FROM reminders WHERE remind_at BETWEEN ? AND ? AND done = 0",
         (win_lo, win_hi)

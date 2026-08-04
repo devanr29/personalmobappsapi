@@ -31,6 +31,9 @@ def log_response(response):
 from api import api_bp
 app.register_blueprint(api_bp, url_prefix="/api")
 
+from features.budget import budget_bp
+app.register_blueprint(budget_bp, url_prefix="/api/budget")
+
 # ── DB + Scheduler ───────────────────────────────────────────────
 init_db()
 register_jobs()

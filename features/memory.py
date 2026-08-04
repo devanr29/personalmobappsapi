@@ -1,9 +1,8 @@
-import sqlite3, pickle
+import pickle
 import numpy as np
 from config import gemini_client, MODEL_EMBED, now_jkt
+from db import db_conn
 from tracer import trace
-
-DB_PATH = "bot.db"
 
 # ================================================================
 # EMBEDDING GENERATION
@@ -22,7 +21,7 @@ def save_embedding(source_type: str, source_id: int, content: str):
     embedding = get_embedding(content)
     if not embedding:
         return
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     conn.execute(
         "INSERT INTO embeddings (source_type, source_id, content, embedding, timestamp) VALUES (?, ?, ?, ?, ?)",
         (source_type, source_id, content, pickle.dumps(embedding), str(now_jkt()))
@@ -32,7 +31,7 @@ def save_embedding(source_type: str, source_id: int, content: str):
 
 def delete_embedding(source_type: str, source_id: int):
     """Remove the stored embedding for a note/idea so semantic search stops returning it."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_conn()
     conn.execute(
         "DELETE FROM embeddings WHERE source_type = ? AND source_id = ?",
         (source_type, source_id)
@@ -62,7 +61,7 @@ def semantic_search(query: str, top_k: int = 3, min_score: float = 0.45) -> list
     if not query_embedding:
         return []
 
-    conn  = sqlite3.connect(DB_PATH)
+    conn  = db_conn()
     rows  = conn.execute(
         "SELECT source_type, source_id, content, embedding FROM embeddings"
     ).fetchall()
