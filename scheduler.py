@@ -16,7 +16,10 @@ def register_jobs():
     from features.quotes import send_scheduled_quote
     from features.budget.alerts import run_budget_alerts
 
-    scheduler.add_job(check_and_send_reminders, "interval", minutes=1,  id="reminder_check")
+    # 5 min rather than 1: a reminder firing up to 4 minutes later than its
+    # exact time is not user-visible, and this job was the single largest
+    # source of background log volume (every run logs on entry/exit).
+    scheduler.add_job(check_and_send_reminders, "interval", minutes=5,  id="reminder_check")
 
     # A polling interval, not a cron trigger: daily_checkin_time is
     # user-editable at runtime via PATCH /api/budget/alerts/prefs, and a

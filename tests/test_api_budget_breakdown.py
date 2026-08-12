@@ -18,3 +18,23 @@ def test_summary_returns_null_when_no_wallets_configured(client, auth_headers):
     resp = client.get("/api/budget", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.get_json()["data"] is None
+
+
+def test_breakdown_carries_wallets_and_computed_at_and_unread_count(client, auth_headers):
+    # These three fields let the mobile Budget screen build its whole view
+    # from ONE request instead of four (GET /breakdown used to be joined
+    # by separate GET /api/budget, /wallets, /alerts calls).
+    from features.budget import repo
+
+    wallet = repo.create_wallet("_TestBreakdownWallet", opening_balance=500_000)
+    try:
+        resp = client.get("/api/budget/breakdown", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()["data"]
+        assert "computedAt" in body and body["computedAt"]
+        assert isinstance(body["unreadAlertCount"], int)
+        match = next(w for w in body["wallets"] if w["id"] == wallet["id"])
+        assert match["name"] == "_TestBreakdownWallet"
+        assert match["balance"] == 500_000
+    finally:
+        repo.delete_wallet(wallet["id"])

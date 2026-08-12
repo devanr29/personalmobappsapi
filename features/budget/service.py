@@ -79,9 +79,16 @@ def build_period_view(conn=None):
             if r["category_id"] not in variable_ids and r["spend"] > 0
         ]
 
+        # Fetched once here (rather than left to money_in_hand()'s own
+        # internal call) so build_period_view()'s caller can also expose
+        # the per-wallet breakdown — GET /breakdown used to need a
+        # separate GET /wallets round-trip from the client for exactly
+        # this data.
+        balances = repo.wallet_balances(conn=conn)
+
         data = compute_budget_by_id(
             days_left=days_left,
-            remaining_money=repo.money_in_hand(conn=conn, wallets=wallets),
+            remaining_money=repo.money_in_hand(conn=conn, wallets=wallets, balances=balances),
             bills=[{"id": b["id"], "name": b["name"], "amount": b["amount"], "due_day": b["due_day"]} for b in bills],
             categories=categories,
             paid_bill_ids=paid_bill_ids,
@@ -90,6 +97,7 @@ def build_period_view(conn=None):
             goal_reservations=goal_reservations(period, conn=conn),
         )
         data["period_id"] = period["id"]
+        data["wallets"] = [{**w, "balance": balances.get(w["id"], 0)} for w in wallets]
         return data
     finally:
         if owns_conn:

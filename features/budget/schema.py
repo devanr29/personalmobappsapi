@@ -179,8 +179,56 @@ def _migration_1():
     return [_add_alert_log_columns]
 
 
+def _migration_2():
+    """Adds what the Wallet by BudgetBakers sync (features/budget/wallet/)
+    needs: an updated_at on transactions (the push side has no way to tell
+    "edited locally since last sync" without one — created_at never
+    changes, and deleted_at only covers deletes), a local label table
+    (Wallet has labels; we didn't), and a link table mapping our int PKs
+    to Wallet's UUIDs per entity type. The link table is deliberately its
+    own table rather than a wallet_remote_id column bolted onto each
+    ledger table — same rationale as budget_alert_log staying separate
+    from budget_transactions: if the Wallet integration is ever dropped,
+    nothing about the core schema has to change."""
+    def _add_txn_updated_at(conn):
+        _add_column_if_missing(conn, "budget_transactions", "updated_at", "TEXT")
+
+    return [
+        _add_txn_updated_at,
+        f"""
+        CREATE TABLE IF NOT EXISTS budget_labels (
+            id         {_PK},
+            name       TEXT    NOT NULL UNIQUE,
+            color      TEXT,
+            archived   INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS budget_transaction_labels (
+            transaction_id INTEGER NOT NULL REFERENCES budget_transactions(id) ON DELETE CASCADE,
+            label_id       INTEGER NOT NULL REFERENCES budget_labels(id)       ON DELETE CASCADE,
+            PRIMARY KEY (transaction_id, label_id)
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS budget_wallet_links (
+            id                {_PK},
+            entity_type       TEXT NOT NULL,
+            local_id          INTEGER NOT NULL,
+            remote_id         TEXT NOT NULL,
+            remote_updated_at TEXT,
+            local_synced_at   TEXT,
+            last_direction    TEXT,
+            UNIQUE(entity_type, remote_id),
+            UNIQUE(entity_type, local_id)
+        )
+        """,
+    ]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
-MIGRATIONS = [_migration_0(), _migration_1()]
+MIGRATIONS = [_migration_0(), _migration_1(), _migration_2()]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 

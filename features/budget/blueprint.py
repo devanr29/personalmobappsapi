@@ -5,6 +5,7 @@ here via the shared functions in api_common.py."""
 from flask import Blueprint, request
 
 from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_error, start_timer, log_timing
+from config import now_jkt
 from db import db_conn
 from features.budget import repo, service
 from features.budget.errors import BudgetError
@@ -12,6 +13,7 @@ from features.budget.serializers import (
     camel_alert, camel_alert_prefs, camel_bill, camel_budget_breakdown, camel_category, camel_goal,
     camel_seed_result, camel_transaction, camel_wallet,
 )
+from features.budget.wallet import sync as wallet_sync
 
 budget_bp = Blueprint("budget", __name__)
 
@@ -62,13 +64,23 @@ def breakdown():
     # ~9-round-trip aggregate, and get_today_card() used to recompute it
     # from scratch internally — passing the already-computed `data` in as
     # `view` skips that second full pass entirely.
+    #
+    # Also carries wallets + unreadAlertCount now (see camel_budget_breakdown
+    # and build_period_view's data["wallets"]) so the Budget tab's screen
+    # load is one request instead of four (GET /breakdown was previously
+    # joined by separate GET /api/budget, /wallets, /alerts calls — each
+    # firing its own independent ~9-query build_period_view() on the
+    # summary side alone).
     conn = db_conn()
     try:
         data = service.build_period_view(conn=conn)
         if not data:
             return ok(None)
         body = camel_budget_breakdown(data)
+        body["computedAt"] = str(now_jkt())
         body["today"] = service.get_today_card(view=data, conn=conn)
+        _, unread_count = repo.get_alerts(unread_only=True, limit=1)
+        body["unreadAlertCount"] = unread_count
         return ok(body)
     finally:
         conn.close()
@@ -453,3 +465,43 @@ def alert_prefs_edit():
         if camel in body:
             fields[snake] = body[camel]
     return ok(camel_alert_prefs(repo.update_alert_prefs(**fields)))
+
+
+# ================================================================
+# WALLET SYNC — two-way sync against Wallet by BudgetBakers' REST API.
+# Manual-trigger only, no scheduler job — see features/budget/wallet/ and
+# docs/BUDGETBAKERS_API.md. sync.py's dicts are already camelCase-keyed,
+# so routes return them straight through ok() without a serializer.
+# ================================================================
+@budget_bp.route("/sync/wallet/status", methods=["GET"])
+def wallet_sync_status():
+    return ok(wallet_sync.get_status())
+
+
+@budget_bp.route("/sync/wallet/preview", methods=["POST"])
+def wallet_sync_preview():
+    """Dry run of both directions — nothing written. Always call this
+    before /pull or /push against real financial data."""
+    return ok(wallet_sync.preview())
+
+
+@budget_bp.route("/sync/wallet/pull", methods=["POST"])
+def wallet_sync_pull():
+    return ok({"pull": wallet_sync.pull_all(apply=True), "summary": service.get_summary()})
+
+
+@budget_bp.route("/sync/wallet/push", methods=["POST"])
+def wallet_sync_push():
+    return ok({"push": wallet_sync.push_all(apply=True)})
+
+
+@budget_bp.route("/sync/wallet", methods=["POST"])
+def wallet_sync_run():
+    pull_result = wallet_sync.pull_all(apply=True)
+    push_result = wallet_sync.push_all(apply=True)
+    return ok({"pull": pull_result, "push": push_result, "summary": service.get_summary()})
+
+
+@budget_bp.route("/sync/wallet/compare", methods=["GET"])
+def wallet_sync_compare():
+    return ok(wallet_sync.compare())

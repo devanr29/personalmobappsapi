@@ -62,7 +62,12 @@ def check_auth(exempt_paths=()):
 
 
 def handle_unexpected_error(e, tag="api"):
-    logger.warning(f"[{tag}] unhandled error: {e}")
+    # logger.exception (not .warning(str(e))) so bot_all.log carries the
+    # full traceback — a bare message was enough for validation-style
+    # errors but left every *unexpected* one (e.g. a vendor API returning
+    # an undocumented field shape) needing a live repro to even locate,
+    # let alone diagnose.
+    logger.exception(f"[{tag}] unhandled error")
     return err("INTERNAL_ERROR", "Something went wrong.", 500)
 
 

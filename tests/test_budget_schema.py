@@ -29,6 +29,7 @@ _BUDGET_TABLES = [
     "budget_wallets", "budget_categories", "budget_periods", "budget_bills",
     "budget_goals", "budget_transactions", "budget_bill_payments",
     "budget_goal_contributions", "budget_alert_prefs", "budget_alert_log",
+    "budget_labels", "budget_transaction_labels", "budget_wallet_links",
 ]
 
 

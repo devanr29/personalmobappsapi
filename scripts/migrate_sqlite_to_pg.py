@@ -28,6 +28,9 @@ import os
 import sqlite3
 import sys
 
+from dotenv import load_dotenv
+load_dotenv("environtment.env")
+
 SQLITE_PATH = os.environ.get("DB_PATH", "bot.db")
 
 # (table, columns-in-order, blob-column-name-or-None)
@@ -76,7 +79,7 @@ TABLES = [
     ("budget_transactions", [
         "id", "occurred_at", "amount", "direction", "category_id", "wallet_id",
         "transfer_wallet_id", "period_id", "bill_id", "goal_id", "note",
-        "source", "raw_input", "created_at", "deleted_at",
+        "source", "raw_input", "created_at", "deleted_at", "updated_at",
     ], None),
     ("budget_bill_payments", [
         "id", "bill_id", "period_id", "transaction_id", "paid_at",
@@ -90,7 +93,22 @@ TABLES = [
         "low_daily_budget_threshold", "updated_at",
     ], None),
     ("budget_alert_log", ["id", "kind", "ref_key", "sent_at", "title", "body", "delivered", "read_at"], None),
+    # Added by schema.py migration 2 (features/budget/wallet/ sync support).
+    # budget_labels has no FK dependents listed above it, so it can sit
+    # anywhere; budget_transaction_labels depends on both budget_transactions
+    # (already listed above) and budget_labels, so it must come after both.
+    ("budget_labels", ["id", "name", "color", "archived", "created_at"], None),
+    ("budget_transaction_labels", ["transaction_id", "label_id"], None),
+    ("budget_wallet_links", [
+        "id", "entity_type", "local_id", "remote_id",
+        "remote_updated_at", "local_synced_at", "last_direction",
+    ], None),
 ]
+
+# (table -> composite PK columns) for the one junction table with no
+# single "id"/"key" column — _insert_sql()'s default ON CONFLICT target
+# doesn't apply to it.
+_COMPOSITE_PK = {"budget_transaction_labels": ("transaction_id", "label_id")}
 
 # Tables whose "id" column is backed by a Postgres SERIAL sequence. Copying
 # explicit id values via INSERT never advances that sequence, so the first
@@ -113,10 +131,18 @@ def _select_sql(table: str, columns: list[str]) -> str:
 
 
 def _insert_sql(table: str, columns: list[str]) -> str:
-    pk = _pk_column(columns)
     col_list = ", ".join(columns)
     placeholders = ", ".join(["%s"] * len(columns))
-    update_cols = [c for c in columns if c != pk]
+
+    if table in _COMPOSITE_PK:
+        pk_cols = _COMPOSITE_PK[table]
+        conflict_target = ", ".join(pk_cols)
+        update_cols = [c for c in columns if c not in pk_cols]
+    else:
+        pk_cols = (_pk_column(columns),)
+        conflict_target = pk_cols[0]
+        update_cols = [c for c in columns if c != pk_cols[0]]
+
     if update_cols:
         set_clause = ", ".join([c + " = EXCLUDED." + c for c in update_cols])
         conflict_action = "DO UPDATE SET " + set_clause
@@ -124,7 +150,7 @@ def _insert_sql(table: str, columns: list[str]) -> str:
         conflict_action = "DO NOTHING"
     return (
         "INSERT INTO " + table + " (" + col_list + ") VALUES (" + placeholders + ") "
-        "ON CONFLICT (" + pk + ") " + conflict_action
+        "ON CONFLICT (" + conflict_target + ") " + conflict_action
     )
 
 
@@ -164,9 +190,13 @@ def migrate(dry_run: bool):
         print("No SQLite source found at " + repr(SQLITE_PATH) + " — nothing to migrate.")
         return 1
 
-    database_url = os.environ.get("DATABASE_URL", "").strip()
+    # Local dev now runs with DATABASE_URL empty (see environtment.env) so
+    # db.py falls back to SQLite — this script still needs the real Neon
+    # URL to migrate *into*, so it falls back to NEON_DATABASE_URL when
+    # DATABASE_URL isn't set.
+    database_url = (os.environ.get("DATABASE_URL", "").strip() or os.environ.get("NEON_DATABASE_URL", "").strip())
     if not database_url and not dry_run:
-        print("DATABASE_URL is not set — nothing to migrate into.")
+        print("Neither DATABASE_URL nor NEON_DATABASE_URL is set — nothing to migrate into.")
         return 1
 
     src = sqlite3.connect(SQLITE_PATH)

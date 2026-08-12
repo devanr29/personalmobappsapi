@@ -1,4 +1,4 @@
-import logging, threading, sys, time, datetime, collections
+import logging, logging.handlers, threading, sys, time, datetime, collections
 from config import LOG_SPREADSHEET_ID, TZ_JKT
 
 _ALL_LOG_FILE   = "bot_all.log"
@@ -46,7 +46,15 @@ def _ensure_log_tab(sheets_svc, tab_name: str):
         _CREATED_LOG_TABS.add(tab_name)
 
 # ================================================================
-# WRITE HELPERS
+# WRITE HELPERS — _buf_all is now only used by the stdout/stderr tee
+# below (print() calls are rare, so a per-line open/write/close there is
+# fine). Every logging.Logger record instead goes through _file_handler,
+# a real RotatingFileHandler, which keeps one file descriptor open and
+# batches through the stdlib's own lock instead of open()/close()-ing
+# bot_all.log on every single log line — that per-line file-open cost,
+# multiplied across the dozens of DEBUG-level lines a single Home/Budget
+# request used to emit (googleapiclient + apscheduler chief among them),
+# was landing directly on request latency.
 # ================================================================
 def _buf_all(line: str):
     with _ALL_LOG_LOCK:
@@ -94,23 +102,33 @@ def _sheet_log_flusher():
 # ================================================================
 # LOGGING HANDLERS
 # ================================================================
-class _AllHandler(logging.Handler):
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            _buf_all(f"[{_ts()}] {record.levelname} {record.name}: {msg}")
-        except Exception:
-            pass
+class _JktLineFormatter(logging.Formatter):
+    """Reproduces the historical [HH:MM:SS] LEVEL name: msg shape (Asia/
+    Jakarta clock, not the server's local time) so get_all_logs() and the
+    /logs viewer don't need to change."""
+    def format(self, record):
+        base_message = logging.Formatter.format(self, record)
+        return "[" + _ts() + "] " + record.levelname + " " + record.name + ": " + base_message
 
-class _HttpxHandler(logging.Handler):
+_file_handler = logging.handlers.RotatingFileHandler(
+    _ALL_LOG_FILE, maxBytes=5_000_000, backupCount=2, encoding="utf-8",
+)
+_file_handler.setFormatter(_JktLineFormatter("%(message)s"))
+
+class _SheetQueueHandler(logging.Handler):
+    """Enqueues for the background Sheets flusher only -- file writing for
+    these same records happens via _file_handler, attached alongside this
+    one on the same loggers."""
     def emit(self, record):
         try:
-            msg  = self.format(record)
-            line = f"[{_ts()}] {record.levelname} {record.name}: {msg}"
-            _buf_all(line)
+            rendered = logging.Handler.format(self, record)
+            line = "[" + _ts() + "] " + record.levelname + " " + record.name + ": " + rendered
             _buf_sheet(line)
         except Exception:
             pass
+
+_sheet_handler = _SheetQueueHandler()
+_sheet_handler.setFormatter(logging.Formatter("%(message)s"))
 
 # ================================================================
 # STDOUT/STDERR TEE
@@ -170,34 +188,51 @@ def get_recent_logs(n: int = 20) -> str:
     except Exception as e:
         return f"Error reading logs from Sheet: {e}"
 
+# Loggers that were the dominant source of bot_all.log's 84,985 lines /
+# 13 MB at DEBUG: googleapiclient.discovery alone was 22,338 lines,
+# apscheduler (executors + scheduler) 31,428, httpcore 1,548. None of
+# that is useful day to day, and none of it was free to write — pin them
+# above their default noise floor explicitly, rather than relying on
+# root's level alone, in case any of these ever sets its own logger
+# level (some libraries do).
+_NOISY_LOGGERS = ("googleapiclient", "apscheduler", "urllib3", "httpcore", "groq", "google_auth_httplib2")
+
 # ================================================================
 # SETUP — call this once at startup
 # ================================================================
 def setup_logging():
-    """Wire up all handlers and redirect stdout/stderr."""
-    _all_handler = _AllHandler()
-    _all_handler.setFormatter(logging.Formatter("%(message)s"))
-    _all_handler.setLevel(logging.DEBUG)
+    """Wire up handlers and redirect stdout/stderr.
 
-    _httpx_handler = _HttpxHandler()
-    _httpx_handler.setFormatter(logging.Formatter("%(message)s"))
-    _httpx_handler.setLevel(logging.INFO)
+    bot_all.log is now a RotatingFileHandler (5MB x 2 backups), attached
+    ONCE per logger -- never on both a logger and one of its ancestors,
+    since with propagate=True (the default) that combination writes every
+    line once per handler it passes through on its way up. That bug was
+    live before this change: tracer had its own handler AND propagate=True
+    up to root's handler (every request-timing line written twice, visible
+    as duplicate lines in bot_all.log), and apscheduler.executors.default
+    had a directly-attached handler on top of its parent apscheduler
+    logger ALSO having one (every scheduler line written up to 3x).
+
+    Root sits at INFO; tracer/httpx are the only loggers with propagate
+    disabled, each carrying its own explicit handlers instead."""
+    root = logging.getLogger()
+    root.addHandler(_file_handler)
+    root.setLevel(logging.INFO)
+
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+    logging.getLogger("werkzeug").setLevel(logging.INFO)
 
     tracer_logger = logging.getLogger("tracer")
-    tracer_logger.addHandler(_httpx_handler)
-    tracer_logger.setLevel(logging.DEBUG)
-    tracer_logger.propagate = True
-    
-    logging.getLogger().addHandler(_all_handler)
-    logging.getLogger().setLevel(logging.DEBUG)
-
-    for name in ("werkzeug", "apscheduler", "apscheduler.executors.default"):
-        lgr = logging.getLogger(name)
-        lgr.addHandler(_all_handler)
-        lgr.setLevel(logging.DEBUG)
+    tracer_logger.addHandler(_file_handler)
+    tracer_logger.addHandler(_sheet_handler)
+    tracer_logger.setLevel(logging.INFO)
+    tracer_logger.propagate = False
 
     httpx_logger = logging.getLogger("httpx")
-    httpx_logger.addHandler(_httpx_handler)
+    httpx_logger.addHandler(_file_handler)
+    httpx_logger.addHandler(_sheet_handler)
     httpx_logger.setLevel(logging.INFO)
     httpx_logger.propagate = False
 

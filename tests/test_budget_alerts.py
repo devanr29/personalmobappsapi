@@ -176,10 +176,16 @@ def test_run_budget_alerts_logs_and_dedupes(budget_env, monkeypatch):
     repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
     monkeypatch.setattr("push.send_push_notification", lambda *a, **k: False)
 
-    first_run = alerts_module.run_budget_alerts()
+    # Explicit now= (past daily_checkin_time) — the same reason
+    # evaluate_alerts()'s own tests fix `now`, below: whether any alert
+    # fires depends on wall-clock time, so leaving this to the real clock
+    # made the test pass or fail depending only on what time it happened
+    # to run.
+    now = datetime.datetime(2026, 8, 3, 21, 0)
+    first_run = alerts_module.run_budget_alerts(now=now)
     assert len(first_run) > 0
 
-    second_run = alerts_module.run_budget_alerts()
+    second_run = alerts_module.run_budget_alerts(now=now)
     assert second_run == []  # every alert from the first run is now deduped
 
     logged, _ = repo.get_alerts(limit=50)
@@ -201,7 +207,7 @@ def test_run_budget_alerts_logs_even_when_push_fails(budget_env, monkeypatch):
     repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
     monkeypatch.setattr("push.send_push_notification", lambda *a, **k: False)
 
-    alerts_module.run_budget_alerts()
+    alerts_module.run_budget_alerts(now=datetime.datetime(2026, 8, 3, 21, 0))
     logged, _ = repo.get_alerts(limit=50)
     assert len(logged) > 0
     assert all(not a["delivered"] for a in logged)
@@ -211,7 +217,7 @@ def test_mark_alert_read_updates_unread_count(budget_env, monkeypatch):
     alerts_module, service, repo = budget_env
     repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
     monkeypatch.setattr("push.send_push_notification", lambda *a, **k: False)
-    alerts_module.run_budget_alerts()
+    alerts_module.run_budget_alerts(now=datetime.datetime(2026, 8, 3, 21, 0))
 
     _, unread_before = repo.get_alerts()
     assert unread_before > 0

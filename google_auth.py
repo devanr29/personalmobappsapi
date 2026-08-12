@@ -1,10 +1,19 @@
-import os, pickle
+import os
+import threading
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from config import SCOPES
 from tracer import trace
+import pickle
 
 _google_services_cache = None
+# GET /api/home calls this from two concurrent worker threads (Calendar +
+# Tasks) via ThreadPoolExecutor -- without a lock, both could see the cache
+# empty on the very first request, race to build services, and race to
+# refresh the same OAuth token concurrently (wasteful at best; some OAuth
+# providers invalidate a refresh token once used, which would make a
+# concurrent second refresh with the now-stale token fail outright).
+_google_services_lock = threading.Lock()
 
 def get_google_services():
     """Return (calendar, sheets, tasks) services. Loads once and caches.
@@ -14,6 +23,14 @@ def get_google_services():
     if _google_services_cache is not None:
         return _google_services_cache
 
+    with _google_services_lock:
+        if _google_services_cache is not None:
+            return _google_services_cache
+        return _build_google_services()
+
+
+def _build_google_services():
+    global _google_services_cache
     creds = None
 
     # 1. Try env var (base64-encoded pickle) — recommended for Railway/cloud

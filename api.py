@@ -1,3 +1,6 @@
+import contextvars
+from concurrent.futures import ThreadPoolExecutor
+
 from flask import Blueprint, request
 
 from database import clear_conv_history, save_conv_turn
@@ -65,18 +68,42 @@ def health():
 
 
 # ================================================================
-# HOME — aggregate read for the dashboard tab
+# HOME — aggregate read for the dashboard tab. The 5 sources below don't
+# depend on each other or on Flask's `request`, so they run concurrently
+# instead of one-after-another — this used to be 2 live Google API calls
+# (Calendar, Tasks — neither cached) plus a ~9-round-trip budget summary
+# plus a reminders query plus a quote lookup, strictly sequential in one
+# handler; wall time was the SUM of all five. A small pool is plenty —
+# this is I/O-bound waiting, not CPU work, and the pool is scoped to a
+# single request (`with` closes it once every result is collected).
 # ================================================================
+def _submit_with_context(executor, fn, *args, **kwargs):
+    """ThreadPoolExecutor.submit() does not propagate contextvars to the
+    worker thread on its own (unlike asyncio) — without this, every
+    @trace log line from these 5 calls would show trace_id '-' instead of
+    the request's actual id, breaking the /logs correlation Phase 1 of
+    this fix was making useful again."""
+    ctx = contextvars.copy_context()
+    return executor.submit(ctx.run, fn, *args, **kwargs)
+
+
 @api_bp.route("/home", methods=["GET"])
 def home():
-    events = get_events_structured()
-    return _ok({
-        "tasks":         get_tasks_structured(),
-        "nextEvent":      events[0] if events else None,
-        "budgetSummary":  get_budget_summary(),
-        "reminders":      get_reminders_structured(limit=2),
-        "quoteOfDay":     get_quote_of_day(),
-    })
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        events_future    = _submit_with_context(executor, get_events_structured)
+        tasks_future     = _submit_with_context(executor, get_tasks_structured)
+        budget_future    = _submit_with_context(executor, get_budget_summary)
+        reminders_future = _submit_with_context(executor, get_reminders_structured, limit=2)
+        quote_future     = _submit_with_context(executor, get_quote_of_day)
+
+        events = events_future.result()
+        return _ok({
+            "tasks":         tasks_future.result(),
+            "nextEvent":      events[0] if events else None,
+            "budgetSummary":  budget_future.result(),
+            "reminders":      reminders_future.result(),
+            "quoteOfDay":     quote_future.result(),
+        })
 
 
 # ================================================================

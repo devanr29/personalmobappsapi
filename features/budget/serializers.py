@@ -94,6 +94,7 @@ def camel_seed_result(result: dict) -> dict:
 
 def camel_budget_breakdown(data: dict) -> dict:
     return {
+        "wallets": [{**camel_wallet(w), "balance": w["balance"]} for w in data["wallets"]],
         "remaining": data["remaining"],
         "stillOwed": [
             {"name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")} for e in data["still_owed"]

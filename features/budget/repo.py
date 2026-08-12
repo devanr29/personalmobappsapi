@@ -174,15 +174,18 @@ def wallet_balance(wallet_id) -> int:
     return wallet_balances().get(wallet_id, 0)
 
 
-def money_in_hand(conn=None, wallets=None) -> int:
+def money_in_hand(conn=None, wallets=None, balances=None) -> int:
     """Sum of every spendable, non-archived wallet's balance. Pass
     `wallets` when the caller already fetched the non-archived list (e.g.
-    build_period_view() needs it anyway to check the "not set up" case) —
-    skips a redundant identical query."""
+    build_period_view() needs it anyway to check the "not set up" case),
+    and `balances` when the caller also needs the full per-wallet dict for
+    its own response (build_period_view() does, for the breakdown's
+    wallet strip) — either skips a redundant identical query."""
     owns_conn = conn is None
     if owns_conn:
         conn = db_conn()
-    balances = wallet_balances(conn=conn)
+    if balances is None:
+        balances = wallet_balances(conn=conn)
     if wallets is None:
         wallets = get_wallets(include_archived=False, conn=conn)
     if owns_conn:
@@ -753,7 +756,7 @@ def create_goal_contribution(goal_id, transaction_id, amount, occurred_at):
 # ================================================================
 _TXN_COLS = (
     "id, occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id, "
-    "period_id, bill_id, goal_id, note, source, raw_input, created_at, deleted_at"
+    "period_id, bill_id, goal_id, note, source, raw_input, created_at, deleted_at, updated_at"
 )
 _TXN_COLS_LIST = [c.strip() for c in _TXN_COLS.split(",")]
 
@@ -775,13 +778,14 @@ def _txn_row(row):
         "category_id": row[4], "wallet_id": row[5], "transfer_wallet_id": row[6],
         "period_id": row[7], "bill_id": row[8], "goal_id": row[9], "note": row[10],
         "source": row[11], "raw_input": row[12], "created_at": row[13], "deleted_at": row[14],
+        "updated_at": row[15],
     }
 
 
 def _txn_list_row(row):
     txn = _txn_row(row)
-    txn["category_name"] = row[15]
-    txn["wallet_name"] = row[16]
+    txn["category_name"] = row[16]
+    txn["wallet_name"] = row[17]
     return txn
 
 
@@ -791,14 +795,15 @@ def create_transaction(
     raw_input=None, occurred_at=None,
 ):
     occurred_at = occurred_at or now_jkt().strftime("%Y-%m-%d %H:%M")
+    now = str(now_jkt())
     conn = db_conn()
     cur = conn.execute(
         "INSERT INTO budget_transactions "
         "(occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id, "
-        " period_id, bill_id, goal_id, note, source, raw_input, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " period_id, bill_id, goal_id, note, source, raw_input, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id,
-         period_id, bill_id, goal_id, note, source, raw_input, str(now_jkt())),
+         period_id, bill_id, goal_id, note, source, raw_input, now, now),
     )
     txn_id = cur.lastrowid
     conn.commit()
@@ -812,6 +817,32 @@ def get_transaction(txn_id):
     row = conn.execute(sql, (txn_id,)).fetchone()
     conn.close()
     return _txn_row(row) if row else None
+
+
+def get_active_transactions(conn=None) -> list:
+    """Every non-deleted transaction, full rows — the push side
+    (features/budget/wallet/sync.py) scans this to find local rows that
+    need creating or updating remotely. Unlike get_transactions(), no
+    pagination/filtering: a push run needs to see everything eligible."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute("SELECT " + _TXN_COLS + " FROM budget_transactions WHERE deleted_at IS NULL").fetchall()
+    if owns_conn:
+        conn.close()
+    return [_txn_row(r) for r in rows]
+
+
+def get_deleted_transaction_ids(conn=None) -> list:
+    """Local ids soft-deleted here but possibly still linked to a Wallet
+    record — the push side's delete pass."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute("SELECT id FROM budget_transactions WHERE deleted_at IS NOT NULL").fetchall()
+    if owns_conn:
+        conn.close()
+    return [r[0] for r in rows]
 
 
 def get_transactions(period_id=None, category_id=None, wallet_id=None, direction=None,
@@ -867,6 +898,12 @@ def update_transaction(txn_id, **fields):
         params.append(value)
     if not sets:
         return get_transaction(txn_id)
+    # updated_at drives the Wallet sync push side (features/budget/wallet/):
+    # a row with no link row, or with updated_at newer than the link's
+    # local_synced_at, is what "changed locally since last sync" means.
+    # Stamped on every real field change, never on a no-op call.
+    sets.append("updated_at = ?")
+    params.append(str(now_jkt()))
     params.append(txn_id)
     conn = db_conn()
     sql = "UPDATE budget_transactions SET " + ", ".join(sets) + " WHERE id = ?"
@@ -877,10 +914,11 @@ def update_transaction(txn_id, **fields):
 
 
 def soft_delete_transaction(txn_id):
+    now = str(now_jkt())
     conn = db_conn()
     conn.execute(
-        "UPDATE budget_transactions SET deleted_at = ? WHERE id = ?",
-        (str(now_jkt()), txn_id),
+        "UPDATE budget_transactions SET deleted_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, txn_id),
     )
     conn.commit()
     conn.close()
@@ -889,7 +927,10 @@ def soft_delete_transaction(txn_id):
 
 def restore_transaction(txn_id):
     conn = db_conn()
-    conn.execute("UPDATE budget_transactions SET deleted_at = NULL WHERE id = ?", (txn_id,))
+    conn.execute(
+        "UPDATE budget_transactions SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+        (str(now_jkt()), txn_id),
+    )
     conn.commit()
     conn.close()
 
@@ -1059,3 +1100,206 @@ def spend_today(period_id, date_str, conn=None) -> int:
     if owns_conn:
         conn.close()
     return _int0(row[0])
+
+
+# ================================================================
+# LABELS — local mirror of Wallet's labels; nothing used these before
+# the Wallet sync (features/budget/wallet/) existed.
+# ================================================================
+_LABEL_COLS = "id, name, color, archived, created_at"
+
+
+def _label_row(row):
+    return {"id": row[0], "name": row[1], "color": row[2], "archived": bool(row[3]), "created_at": row[4]}
+
+
+def create_label(name, color=None):
+    conn = db_conn()
+    cur = conn.execute(
+        "INSERT INTO budget_labels (name, color, created_at) VALUES (?, ?, ?)",
+        (name, color, str(now_jkt())),
+    )
+    label_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return get_label(label_id)
+
+
+def get_labels(include_archived=False, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    where = "" if include_archived else "WHERE archived = 0"
+    sql = "SELECT " + _LABEL_COLS + " FROM budget_labels " + where + " ORDER BY name"
+    rows = conn.execute(sql).fetchall()
+    if owns_conn:
+        conn.close()
+    return [_label_row(r) for r in rows]
+
+
+def get_label(label_id):
+    conn = db_conn()
+    row = conn.execute("SELECT " + _LABEL_COLS + " FROM budget_labels WHERE id = ?", (label_id,)).fetchone()
+    conn.close()
+    return _label_row(row) if row else None
+
+
+def get_label_by_name(name, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    row = conn.execute("SELECT " + _LABEL_COLS + " FROM budget_labels WHERE name = ?", (name,)).fetchone()
+    if owns_conn:
+        conn.close()
+    return _label_row(row) if row else None
+
+
+_LABEL_UPDATABLE = {"name", "color", "archived"}
+_LABEL_BOOL_FIELDS = {"archived"}
+
+
+def update_label(label_id, **fields):
+    if not fields:
+        return get_label(label_id)
+    sets, params = [], []
+    for key, value in fields.items():
+        if key not in _LABEL_UPDATABLE:
+            continue
+        if key in _LABEL_BOOL_FIELDS:
+            value = int(value)
+        sets.append(key + " = ?")
+        params.append(value)
+    if not sets:
+        return get_label(label_id)
+    params.append(label_id)
+    conn = db_conn()
+    conn.execute("UPDATE budget_labels SET " + ", ".join(sets) + " WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+    return get_label(label_id)
+
+
+def get_transaction_label_ids(transaction_id, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute(
+        "SELECT label_id FROM budget_transaction_labels WHERE transaction_id = ?", (transaction_id,)
+    ).fetchall()
+    if owns_conn:
+        conn.close()
+    return [r[0] for r in rows]
+
+
+def set_transaction_labels(transaction_id, label_ids):
+    """Replaces the full label set for a transaction — mirrors Wallet's
+    own PATCH .../labelIds semantics (array = replace-all), so the pull
+    side can apply a remote record's labelIds directly without diffing."""
+    conn = db_conn()
+    conn.execute("DELETE FROM budget_transaction_labels WHERE transaction_id = ?", (transaction_id,))
+    for label_id in label_ids:
+        conn.execute(
+            "INSERT INTO budget_transaction_labels (transaction_id, label_id) VALUES (?, ?)",
+            (transaction_id, label_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+# ================================================================
+# WALLET SYNC LINKS — maps our int PKs to Wallet by BudgetBakers' UUIDs,
+# one row per (entity_type, local row). Kept as its own table rather than
+# a column on each ledger table so the core schema stays vendor-agnostic
+# (see schema.py's migration 2 docstring). Used exclusively by
+# features/budget/wallet/sync.py.
+# ================================================================
+_LINK_COLS = "id, entity_type, local_id, remote_id, remote_updated_at, local_synced_at, last_direction"
+
+
+def _link_row(row):
+    return {
+        "id": row[0], "entity_type": row[1], "local_id": row[2], "remote_id": row[3],
+        "remote_updated_at": row[4], "local_synced_at": row[5], "last_direction": row[6],
+    }
+
+
+def get_link_by_local(entity_type, local_id, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    row = conn.execute(
+        "SELECT " + _LINK_COLS + " FROM budget_wallet_links WHERE entity_type = ? AND local_id = ?",
+        (entity_type, local_id),
+    ).fetchone()
+    if owns_conn:
+        conn.close()
+    return _link_row(row) if row else None
+
+
+def get_link_by_remote(entity_type, remote_id, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    row = conn.execute(
+        "SELECT " + _LINK_COLS + " FROM budget_wallet_links WHERE entity_type = ? AND remote_id = ?",
+        (entity_type, remote_id),
+    ).fetchone()
+    if owns_conn:
+        conn.close()
+    return _link_row(row) if row else None
+
+
+def list_links(entity_type, conn=None) -> dict:
+    """{remote_id: link_row} for every linked row of this entity type —
+    the shape the pull loop needs to check 'have I seen this remote id
+    before' without a query per record."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute(
+        "SELECT " + _LINK_COLS + " FROM budget_wallet_links WHERE entity_type = ?", (entity_type,)
+    ).fetchall()
+    if owns_conn:
+        conn.close()
+    return {r[3]: _link_row(r) for r in rows}
+
+
+def upsert_link(entity_type, local_id, remote_id, remote_updated_at=None, local_synced_at=None, last_direction=None):
+    """Insert-or-update on the (entity_type, local_id) identity — a local
+    row links to at most one remote row and vice versa (both are UNIQUE
+    in the schema), so 'the same local row synced again' must update the
+    existing link in place, never create a second one."""
+    from db import IS_PG
+
+    conn = db_conn()
+    if IS_PG:
+        conn.execute(
+            "INSERT INTO budget_wallet_links "
+            "(entity_type, local_id, remote_id, remote_updated_at, local_synced_at, last_direction) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (entity_type, local_id) DO UPDATE SET "
+            "remote_id = EXCLUDED.remote_id, remote_updated_at = EXCLUDED.remote_updated_at, "
+            "local_synced_at = EXCLUDED.local_synced_at, last_direction = EXCLUDED.last_direction",
+            (entity_type, local_id, remote_id, remote_updated_at, local_synced_at, last_direction),
+        )
+    else:
+        conn.execute(
+            "INSERT OR REPLACE INTO budget_wallet_links "
+            "(id, entity_type, local_id, remote_id, remote_updated_at, local_synced_at, last_direction) "
+            "VALUES ("
+            "  (SELECT id FROM budget_wallet_links WHERE entity_type = ? AND local_id = ?), "
+            "  ?, ?, ?, ?, ?, ?)",
+            (entity_type, local_id, entity_type, local_id, remote_id, remote_updated_at, local_synced_at, last_direction),
+        )
+    conn.commit()
+    conn.close()
+    return get_link_by_local(entity_type, local_id)
+
+
+def delete_link(entity_type, local_id):
+    conn = db_conn()
+    conn.execute(
+        "DELETE FROM budget_wallet_links WHERE entity_type = ? AND local_id = ?", (entity_type, local_id)
+    )
+    conn.commit()
+    conn.close()
