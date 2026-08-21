@@ -286,13 +286,73 @@ def category_in_use(category_id) -> bool:
     in_bills = conn.execute(
         "SELECT 1 FROM budget_bills WHERE category_id = ? LIMIT 1", (category_id,)
     ).fetchone()
+    in_payments = conn.execute(
+        "SELECT 1 FROM budget_category_payments WHERE category_id = ? LIMIT 1", (category_id,)
+    ).fetchone()
     conn.close()
-    return in_txns is not None or in_bills is not None
+    return in_txns is not None or in_bills is not None or in_payments is not None
 
 
 def delete_category(category_id):
     conn = db_conn()
     conn.execute("DELETE FROM budget_categories WHERE id = ?", (category_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_paid_category_ids(period_id, conn=None) -> set:
+    """Mirrors get_paid_bill_ids(): every category with a
+    budget_category_payments row for this period, regardless of whether
+    that row is backed by a real transaction."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute(
+        "SELECT category_id FROM budget_category_payments WHERE period_id = ?", (period_id,)
+    ).fetchall()
+    if owns_conn:
+        conn.close()
+    return {r[0] for r in rows}
+
+
+def create_category_payment(category_id, period_id, transaction_id, paid_at):
+    """Mirrors create_bill_payment(): UNIQUE(category_id, period_id) is
+    service.pay_variable_category()'s real concurrency guard against
+    double-marking a category paid in one period."""
+    conn = db_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO budget_category_payments (category_id, period_id, transaction_id, paid_at) VALUES (?, ?, ?, ?)",
+            (category_id, period_id, transaction_id, paid_at),
+        )
+        payment_id = cur.lastrowid
+        conn.commit()
+        return payment_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_category_payment(category_id, period_id):
+    conn = db_conn()
+    row = conn.execute(
+        "SELECT id, category_id, period_id, transaction_id, paid_at FROM budget_category_payments "
+        "WHERE category_id = ? AND period_id = ?",
+        (category_id, period_id),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {"id": row[0], "category_id": row[1], "period_id": row[2], "transaction_id": row[3], "paid_at": row[4]}
+
+
+def delete_category_payment(category_id, period_id):
+    conn = db_conn()
+    conn.execute(
+        "DELETE FROM budget_category_payments WHERE category_id = ? AND period_id = ?", (category_id, period_id)
+    )
     conn.commit()
     conn.close()
 
@@ -1045,6 +1105,43 @@ def month_totals(limit=6) -> list:
     conn.close()
     rows = [{"month": r[0], "spend": _int0(r[1]), "income": _int0(r[2]), "count": r[3]} for r in rows]
     return list(reversed(rows))
+
+
+def category_month_totals(from_month: str, conn=None) -> list:
+    """Every category's expense spend bucketed by calendar month, from
+    from_month ('YYYY-MM') forward — the category x time axis nothing
+    else in this file provides (spend_by_category_for_period() and
+    category_spend_ranked_for_period() are both single-period; period_totals()/
+    month_totals() are multi-period but have no category dimension).
+
+    Bounded by a month floor rather than a LIMIT: a LIMIT on a category x
+    month grid would truncate mid-category and hand back a ragged series,
+    and it sidesteps the negative-LIMIT dialect trap (blueprint.py's
+    _MAX_HISTORY_PERIODS comment). t.category_id IS NULL groups into one
+    'Uncategorized' row and must not be filtered out, same rule as
+    category_spend_ranked_for_period(). Both kinds are returned —
+    'fixed'-kind categories have spending patterns too."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute(
+        "SELECT t.category_id, c.name, c.kind, c.monthly_limit, "
+        "substr(t.occurred_at, 1, 7) AS month, SUM(t.amount), COUNT(*) "
+        "FROM budget_transactions t "
+        "LEFT JOIN budget_categories c ON c.id = t.category_id "
+        "WHERE t.deleted_at IS NULL AND t.direction = 'expense' "
+        "AND substr(t.occurred_at, 1, 7) >= ? "
+        "GROUP BY t.category_id, c.name, c.kind, c.monthly_limit, substr(t.occurred_at, 1, 7) "
+        "ORDER BY t.category_id, substr(t.occurred_at, 1, 7)",
+        (from_month,),
+    ).fetchall()
+    if owns_conn:
+        conn.close()
+    return [
+        {"category_id": r[0], "name": r[1], "kind": r[2], "monthly_limit": r[3],
+         "month": r[4], "spend": _int0(r[5]), "count": r[6]}
+        for r in rows
+    ]
 
 
 def largest_expense_for_period(period_id, conn=None):

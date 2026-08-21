@@ -144,6 +144,7 @@ def compute_budget_by_id(
     spend_by_category_id: dict | None = None,         # {category_id: spent_amount}
     unmatched_spending: list[dict] | None = None,      # [{"name","amount"}] caller-supplied
     pending_bill_ids: set | None = None,
+    paid_category_ids: set | None = None,
     goal_reservations: list[dict] | None = None,
 ) -> dict:
     """Exact-id-matched sibling of compute_budget(). Only the front end
@@ -161,6 +162,7 @@ def compute_budget_by_id(
     pending_bill_ids = pending_bill_ids or set()
     spend_by_category_id = spend_by_category_id or {}
     unmatched_spending = unmatched_spending or []
+    paid_category_ids = paid_category_ids or set()
     goal_reservations = goal_reservations or []
 
     still_owed = [b for b in bills if b["id"] not in paid_bill_ids]
@@ -176,11 +178,19 @@ def compute_budget_by_id(
     for cat in categories:
         spent = spend_by_category_id.get(cat["id"], 0)
         leftover = cat["budget"] - spent
+        paid = cat["id"] in paid_category_ids
+        # A category marked paid drops out of total_var_remaining the same
+        # way a paid bill drops out of total_still_owed — regardless of
+        # what was actually spent, the envelope is declared settled. over_budget
+        # stays real (not zeroed): it's informational, not part of the
+        # deduction math, so a paid-but-overspent category still shows it.
         remaining_var.append({
+            "id": cat["id"],
             "name": cat["name"],
-            "remaining": max(leftover, 0),
+            "remaining": 0 if paid else max(leftover, 0),
             "spent": spent,
             "over_budget": max(-leftover, 0),
+            "paid": paid,
         })
 
     return _finalize(

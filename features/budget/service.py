@@ -63,10 +63,21 @@ def build_period_view(conn=None):
         paid_bill_ids = repo.get_paid_bill_ids(period["id"], conn=conn)
 
         variable = repo.get_categories(kind="variable", conn=conn)
-        variable_ids = {c["id"] for c in variable}
-        categories = [{"id": c["id"], "name": c["name"], "budget": c["monthly_limit"] or 0} for c in variable]
+        # A variable category is a budget envelope only once it has a
+        # positive monthly_limit. Everything else is Wallet-sync imported
+        # taxonomy — listing those as "Rp 0 left" envelopes buried the
+        # handful of real budgets under dozens of meaningless rows.
+        # monthly_limit is the right signal because it's the only category
+        # field sync doesn't overwrite (wallet/sync.py's _pull_categories
+        # writes name/kind/archived from remote every pull), and because
+        # insights.budget_vs_actual() and alerts.py's over-budget check
+        # already draw this exact line.
+        budgeted = [c for c in variable if c["monthly_limit"]]
+        variable_ids = {c["id"] for c in budgeted}
+        categories = [{"id": c["id"], "name": c["name"], "budget": c["monthly_limit"]} for c in budgeted]
         spend_rows = repo.spend_by_category_for_period(period["id"], conn=conn)
         spend_by_category_id = {r["category_id"]: r["spend"] for r in spend_rows}
+        paid_category_ids = repo.get_paid_category_ids(period["id"], conn=conn)
 
         # Spend against a category_id that isn't a tracked variable budget —
         # either uncategorized (category_id is None) or a 'fixed'-kind
@@ -94,6 +105,7 @@ def build_period_view(conn=None):
             paid_bill_ids=paid_bill_ids,
             spend_by_category_id=spend_by_category_id,
             unmatched_spending=unmatched_spending,
+            paid_category_ids=paid_category_ids,
             goal_reservations=goal_reservations(period, conn=conn),
         )
         data["period_id"] = period["id"]
@@ -285,6 +297,86 @@ def delete_category(category_id):
     if repo.category_in_use(category_id):
         raise BudgetConflict("This category has transactions or bills — archive it instead of deleting it.")
     repo.delete_category(category_id)
+
+
+def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=None, create_transaction=True):
+    """Marks a variable-budget category "paid" for the current period —
+    the Variable-budget sibling of pay_bill(). Unlike a bill, a category's
+    `remaining` is normally derived purely from real spend
+    (compute_budget_by_id), so "paid" here is a manual override recorded
+    in budget_category_payments: once set, remaining reads as 0 for the
+    rest of the period regardless of actual spend, the same way a paid
+    bill drops out of total_still_owed regardless of what it cost to
+    settle.
+
+    create_transaction controls whether that override is backed by a real
+    expense (wallet balance drops, it shows up in Transactions) or is
+    pure bookkeeping — e.g. the money already left some other way and the
+    user doesn't want it double-counted. When True and no explicit amount
+    is given, the amount defaults to what's left of the budget this
+    period (monthly_limit minus spend already logged via "Log spend"), so
+    a one-tap "mark as paid" can't double-count spend that's already
+    there — and if nothing is left, no transaction is created at all,
+    since there'd be nothing new to record."""
+    from db import integrity_errors
+
+    category = repo.get_category(category_id)
+    if category is None:
+        raise BudgetNotFound(f"No category with id {category_id}.")
+    if category["kind"] != "variable":
+        raise BudgetValidationError("Only variable-budget categories can be marked paid.")
+    if amount is not None and (not isinstance(amount, (int, float)) or amount <= 0):
+        raise BudgetValidationError("amount must be a positive number.")
+
+    period = ensure_current_period(get_payroll_day())
+
+    txn = None
+    if create_transaction:
+        resolved_amount = int(amount) if amount is not None else None
+        if resolved_amount is None:
+            spend_rows = repo.spend_by_category_for_period(period["id"])
+            spent = next((r["spend"] for r in spend_rows if r["category_id"] == category_id), 0)
+            resolved_amount = max((category["monthly_limit"] or 0) - spent, 0)
+
+        if resolved_amount > 0:
+            resolved_wallet_id = wallet_id
+            if resolved_wallet_id is None:
+                default_wallet = repo.get_default_wallet()
+                resolved_wallet_id = default_wallet["id"] if default_wallet else None
+            _validate_refs(category_id, resolved_wallet_id)
+            txn = repo.create_transaction(
+                amount=resolved_amount, direction="expense", category_id=category_id,
+                wallet_id=resolved_wallet_id, period_id=period["id"], note=category["name"],
+                source="category_payment", occurred_at=_normalize_occurred_at(occurred_at),
+            )
+
+    try:
+        repo.create_category_payment(category_id, period["id"], txn["id"] if txn else None, str(now_jkt()))
+    except integrity_errors():
+        # repo.create_category_payment() already rolled back and closed its
+        # own (now-failed) connection — soft_delete_transaction() below
+        # opens a fresh one, so there's no poisoned state to carry over.
+        if txn is not None:
+            repo.soft_delete_transaction(txn["id"])
+        raise BudgetConflict(f"{category['name']} is already marked paid for this period.")
+
+    return txn, get_summary()
+
+
+def unpay_variable_category(category_id):
+    category = repo.get_category(category_id)
+    if category is None:
+        raise BudgetNotFound(f"No category with id {category_id}.")
+
+    period = ensure_current_period(get_payroll_day())
+    payment = repo.get_category_payment(category_id, period["id"])
+    if payment is None:
+        raise BudgetNotFound(f"{category['name']} is not marked paid for this period.")
+
+    if payment["transaction_id"] is not None:
+        repo.soft_delete_transaction(payment["transaction_id"])
+    repo.delete_category_payment(category_id, period["id"])
+    return category, get_summary()
 
 
 # ================================================================
@@ -709,11 +801,18 @@ def build_insights_history(periods: int = 6, group_by: str = "period"):
     current_period_id = ensure_current_period(get_payroll_day())["id"]
 
     if group_by == "month":
-        rows = repo.month_totals(limit=periods)
+        # Densify then slice: month_totals() only returns months that had
+        # activity, so a gap (or a current month with no spend yet) would
+        # otherwise be silently absent rather than zero — see
+        # insights.dense_months' docstring. Slicing after filling means
+        # "the most recent N calendar months", not "the most recent N
+        # months that happened to have a transaction".
         current_month = now_jkt().date().strftime("%Y-%m")
+        rows = insights.dense_months(repo.month_totals(limit=periods), current_month)[-periods:]
         items = [
             {"periodId": None, "startDate": None, "endDate": None,
-             "label": insights.month_label(r["month"]), "spend": r["spend"], "income": r["income"],
+             "label": insights.month_label(r["month"]), "shortLabel": insights.month_short_label(r["month"]),
+             "monthKey": r["month"], "spend": r["spend"], "income": r["income"],
              "net": r["income"] - r["spend"], "count": r["count"], "isCurrent": r["month"] == current_month}
             for r in rows
         ]
@@ -721,8 +820,9 @@ def build_insights_history(periods: int = 6, group_by: str = "period"):
         rows = repo.period_totals(limit=periods)
         items = [
             {"periodId": r["period_id"], "startDate": r["start_date"], "endDate": r["end_date"],
-             "label": insights.period_label(r["start_date"], r["end_date"]), "spend": r["spend"],
-             "income": r["income"], "net": r["income"] - r["spend"], "count": r["count"],
+             "label": insights.period_label(r["start_date"], r["end_date"]),
+             "shortLabel": insights.period_short_label(r["start_date"], r["end_date"]), "monthKey": None,
+             "spend": r["spend"], "income": r["income"], "net": r["income"] - r["spend"], "count": r["count"],
              "isCurrent": r["period_id"] == current_period_id}
             for r in rows
         ]
@@ -745,6 +845,70 @@ def build_insights_history(periods: int = 6, group_by: str = "period"):
         "incomeTrend": [i["income"] for i in items],
         "deltaVsPrevious": delta,
         "averageSpend": average_spend,
+    }
+
+
+def build_category_patterns(months: int = 12):
+    """Ranks every category with expense spend in the trailing `months`
+    calendar months by total spend, classifying each one's behavior
+    (insights.classify_pattern) from its complete-month history. Every
+    category shares one x-axis (`months`), unlike the single-period
+    category aggregates elsewhere in this module (category_spend_ranked_
+    for_period, budget_vs_actual) — this is the only category x time view."""
+    current_month = now_jkt().date().strftime("%Y-%m")
+    from_month = insights.shift_month(current_month, -(months - 1))
+    month_keys = [insights.shift_month(from_month, i) for i in range(months)]
+
+    rows = repo.category_month_totals(from_month)
+    by_category = {}
+    for r in rows:
+        key = r["category_id"]
+        entry = by_category.get(key)
+        if entry is None:
+            entry = by_category[key] = {
+                "category_id": r["category_id"], "name": r["name"] or "Uncategorized",
+                "kind": r["kind"], "monthly_limit": r["monthly_limit"], "rows": [], "count": 0,
+            }
+        entry["rows"].append({"month": r["month"], "spend": r["spend"]})
+        entry["count"] += r["count"]
+
+    categories = []
+    for entry in by_category.values():
+        series = insights.dense_months_window(entry["rows"], from_month, current_month)
+        complete_series = series[:-1]  # window always ends on current_month
+        stats = insights.category_pattern_stats(
+            entry["name"], entry["kind"], entry["monthly_limit"], series, complete_series, entry["count"],
+        )
+        stats["categoryId"] = entry["category_id"]
+        largest_idx = stats.pop("largestMonthIndex")
+        stats["largestMonth"] = (
+            {"month": month_keys[largest_idx], "spend": series[largest_idx]} if largest_idx is not None else None
+        )
+        categories.append(stats)
+
+    # Ties broken by categoryId ascending (Uncategorized/None coerced to
+    # -1, sorting first) — mirrors category_spend_ranked_for_period's
+    # `ORDER BY SUM(...) DESC, t.category_id`, which exists so the
+    # sequential-ramp chart colors don't flicker between refetches.
+    categories.sort(key=lambda c: (-c["total"], c["categoryId"] if c["categoryId"] is not None else -1))
+
+    total_spend = sum(c["total"] for c in categories)
+    for c in categories:
+        c["share"] = round(c["total"] / total_spend, 4) if total_spend else 0
+
+    all_categories = repo.get_categories()
+    seen_ids = {c["categoryId"] for c in categories if c["categoryId"] is not None}
+    dormant_count = sum(1 for c in all_categories if c["id"] not in seen_ids)
+
+    return {
+        "months": month_keys,
+        "monthLabels": [insights.month_short_label(m) for m in month_keys],
+        "windowMonths": months,
+        "completeMonths": max(months - 1, 0),
+        "currentMonth": current_month,
+        "totalSpend": total_spend,
+        "dormantCount": dormant_count,
+        "categories": categories,
     }
 
 

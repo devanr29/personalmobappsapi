@@ -174,3 +174,161 @@ def month_label(month_key: str) -> str:
     """'Jul 2026' from a 'YYYY-MM' key."""
     year, month = month_key.split("-")
     return f"{_MONTH_ABBR[int(month) - 1]} {year}"
+
+
+def month_short_label(month_key: str) -> str:
+    """'Jul' from a 'YYYY-MM' key — the column chart's axis tick."""
+    _year, month = month_key.split("-")
+    return _MONTH_ABBR[int(month) - 1]
+
+
+def period_short_label(start_date: str, end_date: str) -> str:
+    """'Jul 25' from a period's start_date — the column chart's axis tick
+    for period mode. Deliberately just the start day, not the full range:
+    the chart's tap-to-select readout already shows period_label() in
+    full when a column is selected."""
+    start = datetime.date.fromisoformat(start_date)
+    return f"{_MONTH_ABBR[start.month - 1]} {start.day}"
+
+
+def _month_index(month_key: str) -> int:
+    """'YYYY-MM' -> an absolute month count, so adjacent months are
+    adjacent integers. Used for dense-filling calendar months, where
+    datetime's month arithmetic has no clean 'add one month' operation
+    and naive implementations mishandle year boundaries (Dec -> Jan)."""
+    year, month = month_key.split("-")
+    return int(year) * 12 + (int(month) - 1)
+
+
+def _month_key(index: int) -> str:
+    """Inverse of _month_index."""
+    year, month = divmod(index, 12)
+    return f"{year:04d}-{month + 1:02d}"
+
+
+def shift_month(month_key: str, delta: int) -> str:
+    """'YYYY-MM' + delta months, correctly crossing year boundaries —
+    exposes the _month_index/_month_key round-trip for callers (service.py)
+    that need to compute a window's start month from its end month, rather
+    than duplicating naive date-math that gets Dec -> Jan wrong."""
+    return _month_key(_month_index(month_key) + delta)
+
+
+def dense_months(rows: list, through_month: str) -> list:
+    """One entry per calendar month from the earliest row through
+    through_month inclusive, zero-filling months with no transactions —
+    same dense-series contract as daily_series() above. Without this a
+    column chart draws Feb adjacent to Apr and silently claims March
+    didn't exist. It also guarantees the current month is present even
+    when nothing has been spent in it yet, which is what makes a partial
+    (in-progress) column render at all instead of just being absent.
+
+    rows must be oldest-first (repo.month_totals already reverses to this
+    order) and each row is {"month", "spend", "income", "count"}. An
+    empty `rows` returns an empty list — there is no 'earliest' to anchor
+    on, and a ledger with zero history has nothing to chart."""
+    if not rows:
+        return []
+    by_month = {r["month"]: r for r in rows}
+    start_index = _month_index(rows[0]["month"])
+    end_index = max(_month_index(rows[-1]["month"]), _month_index(through_month))
+    out = []
+    for i in range(start_index, end_index + 1):
+        key = _month_key(i)
+        row = by_month.get(key)
+        out.append({
+            "month": key,
+            "spend": row["spend"] if row else 0,
+            "income": row["income"] if row else 0,
+            "count": row["count"] if row else 0,
+        })
+    return out
+
+
+def dense_months_window(rows: list, from_month: str, through_month: str) -> list:
+    """Zero-filled monthly series over an EXPLICIT window, unlike
+    dense_months() which anchors its start on rows[0] — right for one
+    aggregate series, but it would give each category a different,
+    non-comparable start month here. Every category in a patterns view
+    must share one x-axis. `rows` is a list of {"month", "spend"} for a
+    single category, any order; empty is valid (a category with zero
+    spend in the window still gets a fully-zero series)."""
+    by_month = {r["month"]: r["spend"] for r in rows}
+    start_index = _month_index(from_month)
+    end_index = _month_index(through_month)
+    return [by_month.get(_month_key(i), 0) for i in range(start_index, end_index + 1)]
+
+
+def classify_pattern(series: list, *, months_active: int) -> str:
+    """Spending-behavior tag for one category's dense monthly series.
+
+    `series` must cover only COMPLETE months — the caller drops the
+    current, still-accruing month before calling this, since a partial
+    current month reads as a collapse against every category's norm and
+    would tag the whole ledger 'falling'.
+
+    Precedence — first match wins:
+      1. 'new'        the only/first activity is in the last 2 months of
+                       the window — too little history for a trend verdict
+      2. 'one-off'     active in exactly 1 month of the window
+      3. 'occasional'  active in fewer than half the window's months
+      4. else, by trend (see below)
+
+    Trend compares the MEAN of the last third of the window against the
+    mean of the first third (k = max(2, len(series) // 3)), not the two
+    endpoints — household spend is noisy, and a single one-off spike in
+    the last month must not flip the verdict on its own. A window
+    shorter than 4 months skips the trend comparison (a "third" is
+    meaningless at that length) and returns 'recurring'. A >=25% shift
+    between the two thirds is treated as a real trend, not noise."""
+    n = len(series)
+    if n == 0 or months_active == 0:
+        return "new"
+
+    active_indexes = [i for i, v in enumerate(series) if v > 0]
+    first_active = active_indexes[0]
+    if n - first_active <= 2:
+        return "new"
+    if months_active == 1:
+        return "one-off"
+    if months_active < n / 2:
+        return "occasional"
+    if n < 4:
+        return "recurring"
+
+    k = max(2, n // 3)
+    first_mean = sum(series[:k]) / k
+    last_mean = sum(series[-k:]) / k
+    if first_mean == 0:
+        return "rising" if last_mean > 0 else "recurring"
+    change = (last_mean - first_mean) / first_mean
+    if change >= 0.25:
+        return "rising"
+    if change <= -0.25:
+        return "falling"
+    return "recurring"
+
+
+def category_pattern_stats(name: str, kind: str, monthly_limit, series: list, complete_series: list, count: int) -> dict:
+    """Per-category summary for the patterns view. `series` is the full
+    dense window (including the partial current month, for charting);
+    `complete_series` excludes it (for classification and averages, so a
+    half-elapsed current month doesn't drag every average down)."""
+    total = sum(complete_series)
+    months_active = sum(1 for v in complete_series if v > 0)
+    months_in_window = len(complete_series)
+    largest = max(range(len(series)), key=lambda i: series[i]) if series else None
+    return {
+        "name": name,
+        "kind": kind,
+        "monthlyLimit": monthly_limit,
+        "total": total,
+        "count": count,
+        "avgPerMonth": round(total / months_in_window) if months_in_window else 0,
+        "avgPerActiveMonth": round(total / months_active) if months_active else 0,
+        "monthsActive": months_active,
+        "monthsInWindow": months_in_window,
+        "pattern": classify_pattern(complete_series, months_active=months_active),
+        "largestMonthIndex": largest,
+        "series": series,
+    }

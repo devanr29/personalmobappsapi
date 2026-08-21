@@ -97,13 +97,18 @@ def camel_budget_breakdown(data: dict) -> dict:
         "wallets": [{**camel_wallet(w), "balance": w["balance"]} for w in data["wallets"]],
         "remaining": data["remaining"],
         "stillOwed": [
-            {"name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")} for e in data["still_owed"]
+            {"billId": e.get("id"), "name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")}
+            for e in data["still_owed"]
         ],
         "pendingAmounts": [
-            {"name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")} for e in data["pending_amounts"]
+            {"billId": e.get("id"), "name": e["name"], "amount": e["amount"], "dueDay": e.get("due_day")}
+            for e in data["pending_amounts"]
         ],
         "remainingVar": [
-            {"name": v["name"], "remaining": v["remaining"], "spent": v["spent"], "overBudget": v["over_budget"]}
+            {
+                "categoryId": v.get("id"), "name": v["name"], "remaining": v["remaining"],
+                "spent": v["spent"], "overBudget": v["over_budget"], "paid": v.get("paid", False),
+            }
             for v in data["remaining_var"]
         ],
         "unmatchedSpending": [{"name": u["name"], "amount": u["amount"]} for u in data["unmatched_spending"]],

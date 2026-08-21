@@ -227,8 +227,31 @@ def _migration_2():
     ]
 
 
+def _migration_3():
+    """Adds budget_category_payments, the variable-budget sibling of
+    budget_bill_payments: lets a category be marked "paid" for a period
+    as its own fact, independent of budget_transactions. A category's
+    `remaining` is normally derived purely from real spend, so this table
+    exists only to record the override (see compute_budget_by_id's
+    paid_category_ids) and, optionally, which transaction backs it —
+    transaction_id is nullable because service.pay_variable_category()
+    lets the caller mark paid without logging a transaction at all."""
+    return [
+        f"""
+        CREATE TABLE IF NOT EXISTS budget_category_payments (
+            id             {_PK},
+            category_id    INTEGER NOT NULL REFERENCES budget_categories(id)   ON DELETE CASCADE,
+            period_id      INTEGER NOT NULL REFERENCES budget_periods(id)      ON DELETE CASCADE,
+            transaction_id INTEGER          REFERENCES budget_transactions(id) ON DELETE SET NULL,
+            paid_at        TEXT    NOT NULL,
+            UNIQUE(category_id, period_id)
+        )
+        """,
+    ]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
-MIGRATIONS = [_migration_0(), _migration_1(), _migration_2()]
+MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3()]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 

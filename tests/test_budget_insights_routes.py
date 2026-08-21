@@ -87,6 +87,36 @@ def test_categories_top_sum_equals_full_list_sum(budget_env):
     assert sum(c["spend"] for c in data["categories"]) == sum(c["spend"] for c in data["categoriesTop"])
 
 
+def test_limitless_variable_category_is_excluded_from_remaining_var(budget_env):
+    # Regression guard for the "Variable budget" filter change: a
+    # kind='variable' category with no monthly_limit is Wallet-sync
+    # imported taxonomy, not a real budget envelope, and must not show up
+    # as a meaningless "Rp 0 left" row.
+    service, repo = budget_env
+    wallet = repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    junk = repo.create_category("Bar cafe", "variable")  # no monthly_limit
+    period = service.build_period_view()
+    repo.create_transaction(15_000, "expense", category_id=junk["id"], wallet_id=wallet["id"], period_id=period["period_id"])
+
+    view = service.build_period_view()
+    assert view["remaining_var"] == []
+    assert any(u["name"] == "Bar cafe" and u["amount"] == 15_000 for u in view["unmatched_spending"])
+    assert view["total_var_remaining"] == 0
+
+
+def test_limited_variable_category_stays_in_remaining_var_at_zero_spend(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    fuel = repo.create_category("Fuel", "variable", monthly_limit=70_000)
+    service.build_period_view()
+
+    view = service.build_period_view()
+    assert len(view["remaining_var"]) == 1
+    assert view["remaining_var"][0]["id"] == fuel["id"]
+    assert view["remaining_var"][0]["remaining"] == 70_000
+    assert view["total_var_remaining"] == 70_000
+
+
 def test_transfer_and_adjustment_excluded_from_every_spend_figure(budget_env):
     service, repo = budget_env
     cash = repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
@@ -182,3 +212,147 @@ def test_history_group_by_month_returns_same_shape(budget_env):
     assert len(history["periods"]) == 1
     assert history["periods"][0]["periodId"] is None
     assert history["spendTrend"] == [50_000]
+
+
+def _shift_month(month_key, delta):
+    """Local, deliberately independent of insights._month_index — this
+    is the test's own ground truth for 'n months before/after', computed
+    relative to config.now_jkt() rather than a hardcoded month so the
+    test doesn't rot."""
+    year, month = (int(x) for x in month_key.split("-"))
+    idx = year * 12 + (month - 1) + delta
+    y, m = divmod(idx, 12)
+    return f"{y:04d}-{m + 1:02d}"
+
+
+def test_history_items_carry_short_labels(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    period = service.build_period_view()
+    repo.create_transaction(50_000, "expense", period_id=period["period_id"])
+
+    period_history = service.build_insights_history(periods=6, group_by="period")
+    assert period_history["periods"][0]["shortLabel"]
+    assert period_history["periods"][0]["monthKey"] is None
+
+    month_history = service.build_insights_history(periods=6, group_by="month")
+    assert month_history["periods"][0]["shortLabel"]
+    assert month_history["periods"][0]["monthKey"] is not None
+
+
+def test_history_month_mode_includes_current_month_with_no_spend(budget_env):
+    # Regression guard: month_totals() only returns months with activity,
+    # so before this fix a current month with zero transactions was
+    # simply absent -- isCurrent was never true and there was no partial
+    # column to render at all.
+    service, repo = budget_env
+    from config import now_jkt
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    current_month = now_jkt().date().strftime("%Y-%m")
+    older_month = _shift_month(current_month, -2)
+    repo.create_transaction(10_000, "expense", occurred_at=f"{older_month}-05 09:00")
+
+    history = service.build_insights_history(periods=6, group_by="month")
+    assert history["periods"][-1]["monthKey"] == current_month
+    assert history["periods"][-1]["isCurrent"] is True
+    assert history["periods"][-1]["spend"] == 0
+
+
+def test_history_month_mode_is_dense_across_a_gap(budget_env):
+    service, repo = budget_env
+    from config import now_jkt
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    current_month = now_jkt().date().strftime("%Y-%m")
+    older_month = _shift_month(current_month, -3)
+    repo.create_transaction(10_000, "expense", occurred_at=f"{older_month}-05 09:00")
+    repo.create_transaction(20_000, "expense", occurred_at=f"{current_month}-01 09:00")
+
+    history = service.build_insights_history(periods=6, group_by="month")
+    months = [p["monthKey"] for p in history["periods"]]
+    assert months == [_shift_month(current_month, d) for d in (-3, -2, -1, 0)]
+    by_month = {p["monthKey"]: p for p in history["periods"]}
+    assert by_month[_shift_month(current_month, -2)]["spend"] == 0
+    assert by_month[_shift_month(current_month, -1)]["spend"] == 0
+    assert by_month[older_month]["spend"] == 10_000
+    assert by_month[current_month]["spend"] == 20_000
+
+
+def test_history_twelve_months_returns_at_most_twelve(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    period = service.build_period_view()
+    repo.create_transaction(10_000, "expense", period_id=period["period_id"])
+
+    history = service.build_insights_history(periods=12, group_by="month")
+    assert len(history["periods"]) <= 12
+
+
+# ================================================================
+# CATEGORY PATTERNS
+# ================================================================
+def test_category_patterns_months_axis_matches_window(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+
+    patterns = service.build_category_patterns(months=6)
+    assert len(patterns["months"]) == 6
+    assert len(patterns["monthLabels"]) == 6
+    assert patterns["windowMonths"] == 6
+    assert patterns["completeMonths"] == 5
+    assert patterns["months"][-1] == patterns["currentMonth"]
+
+
+def test_category_patterns_every_series_matches_the_shared_axis(budget_env):
+    service, repo = budget_env
+    from config import now_jkt
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    current_month = now_jkt().date().strftime("%Y-%m")
+    older_month = _shift_month(current_month, -2)
+    cat = repo.create_category("Fuel", "variable")
+    repo.create_transaction(10_000, "expense", category_id=cat["id"], occurred_at=f"{older_month}-05 09:00")
+
+    patterns = service.build_category_patterns(months=6)
+    assert len(patterns["categories"]) == 1
+    entry = patterns["categories"][0]
+    assert len(entry["series"]) == len(patterns["months"])
+    assert entry["categoryId"] == cat["id"]
+    assert entry["name"] == "Fuel"
+
+
+def test_category_patterns_uncategorized_bucket_is_not_dropped(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    repo.create_transaction(5_000, "expense")  # no category_id
+
+    patterns = service.build_category_patterns(months=6)
+    names = [c["name"] for c in patterns["categories"]]
+    assert "Uncategorized" in names
+
+
+def test_category_patterns_dormant_categories_are_counted_not_listed(budget_env):
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    repo.create_category("Never spent", "variable")  # zero transactions ever
+
+    patterns = service.build_category_patterns(months=6)
+    assert patterns["categories"] == []
+    assert patterns["dormantCount"] == 1
+
+
+def test_category_patterns_share_sums_to_one(budget_env):
+    # share is computed off `total`, which only counts COMPLETE months (the
+    # current, still-accruing month is excluded) -- so the spend has to
+    # land in a prior month within the window for share to be nonzero.
+    service, repo = budget_env
+    from config import now_jkt
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    current_month = now_jkt().date().strftime("%Y-%m")
+    prior_month = _shift_month(current_month, -1)
+    a = repo.create_category("A", "variable")
+    b = repo.create_category("B", "variable")
+    repo.create_transaction(30_000, "expense", category_id=a["id"], occurred_at=f"{prior_month}-05 09:00")
+    repo.create_transaction(70_000, "expense", category_id=b["id"], occurred_at=f"{prior_month}-06 09:00")
+
+    patterns = service.build_category_patterns(months=2)
+    total_share = sum(c["share"] for c in patterns["categories"])
+    assert round(total_share, 4) == 1.0

@@ -85,6 +85,57 @@ def test_bill_pay_and_unpay_routes(client, auth_headers):
         conn.close()
 
 
+def test_category_pay_and_unpay_routes(client, auth_headers):
+    wallet = repo.create_wallet("_HttpCategoryWallet", opening_balance=500_000, is_default=False)
+    category = repo.create_category("_HttpCategoryPay", "variable", monthly_limit=50_000)
+    try:
+        resp = client.post(
+            f"/api/budget/categories/{category['id']}/pay", headers=auth_headers,
+            json={"walletId": wallet["id"]},
+        )
+        assert resp.status_code == 201
+        txn_id = resp.get_json()["data"]["transaction"]["id"]
+
+        resp = client.post(
+            f"/api/budget/categories/{category['id']}/pay", headers=auth_headers,
+            json={"walletId": wallet["id"]},
+        )
+        assert resp.status_code == 409
+
+        resp = client.delete(f"/api/budget/categories/{category['id']}/pay", headers=auth_headers)
+        assert resp.status_code == 200
+
+        assert repo.get_transaction(txn_id)["deleted_at"] is not None
+    finally:
+        conn = _teardown_conn()
+        conn.execute("DELETE FROM budget_category_payments WHERE category_id = ?", (category["id"],))
+        conn.execute("DELETE FROM budget_transactions WHERE category_id = ?", (category["id"],))
+        conn.execute("DELETE FROM budget_categories WHERE id = ?", (category["id"],))
+        conn.execute("DELETE FROM budget_wallets WHERE id = ?", (wallet["id"],))
+        conn.commit()
+        conn.close()
+
+
+def test_category_pay_without_transaction_route(client, auth_headers):
+    category = repo.create_category("_HttpCategoryPayNoTxn", "variable", monthly_limit=50_000)
+    try:
+        resp = client.post(
+            f"/api/budget/categories/{category['id']}/pay", headers=auth_headers,
+            json={"createTransaction": False},
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["data"]["transaction"] is None
+
+        items, total = repo.get_transactions(category_id=category["id"])
+        assert total == 0
+    finally:
+        conn = _teardown_conn()
+        conn.execute("DELETE FROM budget_category_payments WHERE category_id = ?", (category["id"],))
+        conn.execute("DELETE FROM budget_categories WHERE id = ?", (category["id"],))
+        conn.commit()
+        conn.close()
+
+
 def test_wallet_transfer_route(client, auth_headers):
     from_wallet = repo.create_wallet("_HttpTransferFrom", opening_balance=100_000)
     to_wallet = repo.create_wallet("_HttpTransferTo", opening_balance=0)
@@ -149,11 +200,49 @@ def test_insights_history_route_shape(client, auth_headers):
     body = resp.get_json()["data"]
     assert "periods" in body
     assert "spendTrend" in body
+    if body["periods"]:
+        assert "shortLabel" in body["periods"][0]
 
 
 def test_insights_history_bad_group_by_is_400(client, auth_headers):
     resp = client.get("/api/budget/insights/history?groupBy=nonsense", headers=auth_headers)
     assert resp.status_code == 400
+
+
+def test_insights_history_periods_is_clamped(client, auth_headers):
+    # ?periods=9999 must not turn into an unbounded SQL LIMIT / payload.
+    resp = client.get("/api/budget/insights/history?periods=9999", headers=auth_headers)
+    assert resp.status_code == 200
+    assert len(resp.get_json()["data"]["periods"]) <= 24
+
+
+def test_insights_history_negative_periods_does_not_error(client, auth_headers):
+    # A bare negative LIMIT is "no limit" on SQLite but a hard 22023 error
+    # on Postgres -- this must never reach the database unclamped.
+    resp = client.get("/api/budget/insights/history?periods=-1", headers=auth_headers)
+    assert resp.status_code == 200
+    assert len(resp.get_json()["data"]["periods"]) <= 24
+
+
+def test_insights_categories_route_shape(client, auth_headers):
+    resp = client.get("/api/budget/insights/categories?months=3", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()["data"]
+    for key in ("months", "monthLabels", "windowMonths", "completeMonths", "currentMonth", "dormantCount", "categories"):
+        assert key in body
+    assert len(body["months"]) == 3
+
+
+def test_insights_categories_months_is_clamped(client, auth_headers):
+    resp = client.get("/api/budget/insights/categories?months=9999", headers=auth_headers)
+    assert resp.status_code == 200
+    assert len(resp.get_json()["data"]["months"]) <= 24
+
+
+def test_insights_categories_negative_months_does_not_error(client, auth_headers):
+    resp = client.get("/api/budget/insights/categories?months=-1", headers=auth_headers)
+    assert resp.status_code == 200
+    assert len(resp.get_json()["data"]["months"]) >= 1
 
 
 def test_breakdown_includes_today_block(client, auth_headers):

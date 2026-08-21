@@ -91,13 +91,32 @@ def insights_view():
     return ok(service.build_insights())
 
 
+_MAX_HISTORY_PERIODS = 24
+
+
 @budget_bp.route("/insights/history", methods=["GET"])
 def insights_history():
-    periods = _int_arg("periods") or 6
+    # Clamped, not 400'd: `periods` lands in a bare SQL LIMIT, where a
+    # negative value is "no limit" on SQLite but a hard error (22023) on
+    # Postgres. Clamping matches the house convention already set by
+    # _MAX_TXN_LIMIT below.
+    periods = max(1, min(_int_arg("periods") or 6, _MAX_HISTORY_PERIODS))
     group_by = request.args.get("groupBy", "period")
     if group_by not in ("period", "month"):
         return err("VALIDATION_ERROR", "groupBy must be 'period' or 'month'.", 400)
     return ok(service.build_insights_history(periods=periods, group_by=group_by))
+
+
+_MAX_CATEGORY_MONTHS = 24
+
+
+@budget_bp.route("/insights/categories", methods=["GET"])
+def insights_categories():
+    # Same clamp discipline as _MAX_HISTORY_PERIODS above — months feeds a
+    # Python range() and a per-category list comprehension here rather than
+    # a SQL LIMIT, but an unbounded value is still worth rejecting cheaply.
+    months = max(1, min(_int_arg("months") or 12, _MAX_CATEGORY_MONTHS))
+    return ok(service.build_category_patterns(months=months))
 
 
 # ================================================================
@@ -206,6 +225,22 @@ def categories_edit(category_id):
 def categories_delete(category_id):
     service.delete_category(category_id)
     return ok({"id": category_id, "deleted": True})
+
+
+@budget_bp.route("/categories/<int:category_id>/pay", methods=["POST"])
+def categories_pay(category_id):
+    body = request.get_json(silent=True) or {}
+    txn, summary = service.pay_variable_category(
+        category_id, wallet_id=body.get("walletId"), amount=body.get("amount"),
+        occurred_at=body.get("occurredAt"), create_transaction=body.get("createTransaction", True),
+    )
+    return ok({"transaction": camel_transaction(txn) if txn else None, "summary": summary}, status=201)
+
+
+@budget_bp.route("/categories/<int:category_id>/pay", methods=["DELETE"])
+def categories_unpay(category_id):
+    category, summary = service.unpay_variable_category(category_id)
+    return ok({"category": camel_category(category), "summary": summary})
 
 
 # ================================================================

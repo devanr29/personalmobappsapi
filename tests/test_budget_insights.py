@@ -216,3 +216,181 @@ def test_period_label_format():
 
 def test_month_label_format():
     assert insights.month_label("2026-07") == "Jul 2026"
+
+
+def test_month_short_label_format():
+    assert insights.month_short_label("2026-07") == "Jul"
+
+
+def test_period_short_label_format():
+    assert insights.period_short_label("2026-07-25", "2026-08-25") == "Jul 25"
+
+
+# ================================================================
+# dense_months
+# ================================================================
+def test_dense_months_fills_gap_with_zeros():
+    rows = [
+        {"month": "2026-01", "spend": 10_000, "income": 0, "count": 1},
+        {"month": "2026-04", "spend": 20_000, "income": 0, "count": 2},
+    ]
+    result = insights.dense_months(rows, through_month="2026-04")
+    assert [r["month"] for r in result] == ["2026-01", "2026-02", "2026-03", "2026-04"]
+    assert result[1] == {"month": "2026-02", "spend": 0, "income": 0, "count": 0}
+    assert result[2] == {"month": "2026-03", "spend": 0, "income": 0, "count": 0}
+    assert result[3]["spend"] == 20_000
+
+
+def test_dense_months_crosses_year_boundary():
+    rows = [
+        {"month": "2025-11", "spend": 5_000, "income": 0, "count": 1},
+        {"month": "2026-02", "spend": 7_000, "income": 0, "count": 1},
+    ]
+    result = insights.dense_months(rows, through_month="2026-02")
+    assert [r["month"] for r in result] == ["2025-11", "2025-12", "2026-01", "2026-02"]
+
+
+def test_dense_months_extends_to_current_month_with_no_row_for_it():
+    rows = [{"month": "2026-05", "spend": 15_000, "income": 0, "count": 1}]
+    result = insights.dense_months(rows, through_month="2026-07")
+    assert [r["month"] for r in result] == ["2026-05", "2026-06", "2026-07"]
+    assert result[-1] == {"month": "2026-07", "spend": 0, "income": 0, "count": 0}
+
+
+def test_dense_months_empty_rows_returns_empty():
+    assert insights.dense_months([], through_month="2026-07") == []
+
+
+def test_dense_months_single_month_unchanged():
+    rows = [{"month": "2026-07", "spend": 50_000, "income": 10_000, "count": 3}]
+    result = insights.dense_months(rows, through_month="2026-07")
+    assert result == rows
+
+
+def test_dense_months_through_month_older_than_last_row_still_ends_at_last_row():
+    rows = [
+        {"month": "2026-05", "spend": 1_000, "income": 0, "count": 1},
+        {"month": "2026-07", "spend": 2_000, "income": 0, "count": 1},
+    ]
+    result = insights.dense_months(rows, through_month="2026-01")
+    assert [r["month"] for r in result] == ["2026-05", "2026-06", "2026-07"]
+
+
+# ================================================================
+# shift_month
+# ================================================================
+def test_shift_month_forward():
+    assert insights.shift_month("2026-07", 1) == "2026-08"
+
+
+def test_shift_month_crosses_year_boundary_backward():
+    assert insights.shift_month("2026-01", -1) == "2025-12"
+
+
+def test_shift_month_zero_is_identity():
+    assert insights.shift_month("2026-07", 0) == "2026-07"
+
+
+# ================================================================
+# dense_months_window
+# ================================================================
+def test_dense_months_window_fills_every_gap():
+    rows = [{"month": "2026-02", "spend": 5_000}]
+    result = insights.dense_months_window(rows, "2026-01", "2026-04")
+    assert result == [0, 5_000, 0, 0]
+
+
+def test_dense_months_window_empty_rows_still_dense():
+    result = insights.dense_months_window([], "2026-01", "2026-03")
+    assert result == [0, 0, 0]
+
+
+def test_dense_months_window_ignores_rows_outside_the_window():
+    rows = [{"month": "2025-01", "spend": 100}]
+    result = insights.dense_months_window(rows, "2026-01", "2026-02")
+    assert result == [0, 0]
+
+
+# ================================================================
+# classify_pattern
+# ================================================================
+def test_classify_pattern_new_when_first_activity_is_recent():
+    # first (and only) active month is the last one in the window
+    series = [0, 0, 0, 0, 0, 500]
+    assert insights.classify_pattern(series, months_active=1) == "new"
+
+
+def test_classify_pattern_new_wins_over_multiple_recent_active_months():
+    series = [0, 0, 0, 0, 300, 500]
+    assert insights.classify_pattern(series, months_active=2) == "new"
+
+
+def test_classify_pattern_one_off_when_single_old_spike():
+    series = [0, 0, 0, 500, 0, 0, 0, 0]
+    assert insights.classify_pattern(series, months_active=1) == "one-off"
+
+
+def test_classify_pattern_occasional_when_active_less_than_half():
+    series = [100, 0, 0, 150, 0, 0, 120, 0]
+    assert insights.classify_pattern(series, months_active=3) == "occasional"
+
+
+def test_classify_pattern_short_window_defaults_to_recurring():
+    series = [100, 120, 110]  # n=3 < 4, trend comparison skipped entirely
+    assert insights.classify_pattern(series, months_active=3) == "recurring"
+
+
+def test_classify_pattern_rising_trend():
+    series = [100, 100, 100, 100, 100, 100, 300, 300, 300]
+    assert insights.classify_pattern(series, months_active=9) == "rising"
+
+
+def test_classify_pattern_falling_trend():
+    series = [300, 300, 300, 300, 300, 300, 100, 100, 100]
+    assert insights.classify_pattern(series, months_active=9) == "falling"
+
+
+def test_classify_pattern_stable_spend_is_recurring():
+    series = [200] * 9
+    assert insights.classify_pattern(series, months_active=9) == "recurring"
+
+
+def test_classify_pattern_zero_to_active_reads_as_rising():
+    series = [0, 0, 0, 100, 100, 100, 100, 100, 100]
+    assert insights.classify_pattern(series, months_active=6) == "rising"
+
+
+def test_classify_pattern_empty_series_is_new():
+    assert insights.classify_pattern([], months_active=0) == "new"
+
+
+def test_classify_pattern_all_zero_is_new():
+    assert insights.classify_pattern([0, 0, 0, 0], months_active=0) == "new"
+
+
+# ================================================================
+# category_pattern_stats
+# ================================================================
+def test_category_pattern_stats_shape():
+    series = [0, 100, 200, 50]  # last entry is the current, partial month
+    complete_series = series[:-1]
+    stats = insights.category_pattern_stats("Test", "variable", None, series, complete_series, count=5)
+    assert stats["name"] == "Test"
+    assert stats["kind"] == "variable"
+    assert stats["monthlyLimit"] is None
+    assert stats["total"] == 300
+    assert stats["count"] == 5
+    assert stats["avgPerMonth"] == 100  # 300 / 3 complete months
+    assert stats["avgPerActiveMonth"] == 150  # 300 / 2 active months
+    assert stats["monthsActive"] == 2
+    assert stats["monthsInWindow"] == 3
+    assert stats["largestMonthIndex"] == 2  # index of 200 in the full series
+    assert stats["series"] == series
+
+
+def test_category_pattern_stats_all_zero_complete_months():
+    stats = insights.category_pattern_stats("Idle", "variable", 50_000, [0, 0, 0], [0, 0], count=0)
+    assert stats["total"] == 0
+    assert stats["avgPerMonth"] == 0
+    assert stats["avgPerActiveMonth"] == 0
+    assert stats["pattern"] == "new"

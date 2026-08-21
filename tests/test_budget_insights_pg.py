@@ -97,3 +97,41 @@ def test_insights_history_on_postgres(pg_budget_env):
 
     history = service.build_insights_history(periods=6)
     assert isinstance(history["periods"][0]["spend"], int)
+
+
+@requires_postgres
+def test_insights_history_month_mode_dense_gap_fill_on_postgres(pg_budget_env):
+    # Exercises substr(occurred_at, 1, 7) + _int0() under the new
+    # dense_months() gap-fill path -- a zero-filled synthetic month must
+    # still be a plain int, not a Decimal or a missing key.
+    service, repo = pg_budget_env
+    from config import now_jkt
+    repo.create_wallet("_PgInsCash4", opening_balance=500_000, is_default=True)
+    current_month = now_jkt().date().strftime("%Y-%m")
+    year, month = (int(x) for x in current_month.split("-"))
+    idx = year * 12 + (month - 1) - 2
+    y, m = divmod(idx, 12)
+    older_month = f"{y:04d}-{m + 1:02d}"
+    repo.create_transaction(25_000, "expense", occurred_at=f"{older_month}-05 09:00")
+
+    history = service.build_insights_history(periods=6, group_by="month")
+    months = [p["monthKey"] for p in history["periods"]]
+    assert current_month in months
+    gap_entry = next(p for p in history["periods"] if p["monthKey"] != older_month and p["monthKey"] != current_month)
+    assert isinstance(gap_entry["spend"], int)
+    assert gap_entry["spend"] == 0
+
+
+@requires_postgres
+def test_category_patterns_month_totals_are_int_on_postgres(pg_budget_env):
+    # Exercises category_month_totals()'s substr()+_int0() grouping and the
+    # dense_months_window() gap-fill path under Postgres's stricter GROUP BY.
+    service, repo = pg_budget_env
+    wallet = repo.create_wallet("_PgInsCash5", opening_balance=500_000, is_default=True)
+    fuel = repo.create_category("_PgInsFuel2", "variable", monthly_limit=70_000)
+    repo.create_transaction(35_000, "expense", category_id=fuel["id"], wallet_id=wallet["id"])
+
+    patterns = service.build_category_patterns(months=3)
+    entry = next(c for c in patterns["categories"] if c["categoryId"] == fuel["id"])
+    assert isinstance(entry["total"], int)
+    assert all(isinstance(v, int) for v in entry["series"])

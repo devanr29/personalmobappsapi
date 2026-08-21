@@ -46,6 +46,23 @@ def test_pay_bill_removes_it_from_still_owed_and_creates_transaction(budget_env)
     assert summary["deductions"] == after["total_deductions"]
 
 
+def test_pay_bill_with_custom_amount_uses_that_amount_not_the_bills(budget_env):
+    # Backs the mobile UI's "Pay a different amount" input — service.pay_bill
+    # already accepted a custom amount, this just pins the contract the
+    # mobile card now depends on: paying less (or more) than the bill's
+    # configured amount records the real amount, not the bill's default.
+    service, repo = budget_env
+    repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    bill = service.create_bill("House Rent", 955_000)
+
+    txn, summary = service.pay_bill(bill["id"], amount=900_000)
+    assert txn["amount"] == 900_000
+
+    after = service.build_period_view()
+    assert not any(b["id"] == bill["id"] for b in after["still_owed"])
+    assert summary["deductions"] == after["total_deductions"]
+
+
 def test_pay_bill_twice_in_same_period_is_409(budget_env):
     from features.budget.errors import BudgetConflict
 

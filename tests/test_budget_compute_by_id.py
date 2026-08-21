@@ -59,14 +59,16 @@ def _run_by_id(**overrides):
 
 
 def _strip_ids(data: dict) -> dict:
-    """The id-matched front end's still_owed/pending_amounts carry the raw
-    bill dicts (which have an "id" key); the name-matched front end's carry
-    raw fixed_expense dicts (which don't). That's an intentional, harmless
-    shape difference — strip it so the equivalence check compares the
-    numbers that actually matter."""
+    """The id-matched front end's still_owed/pending_amounts/remaining_var
+    carry an "id" key (raw bill dicts, and category id threaded through for
+    the mobile UI's edit affordances), and remaining_var also carries a
+    "paid" key (compute_budget_by_id's paid_category_ids override — there's
+    no id-less equivalent in the name-matched front end to compare against).
+    Both are intentional, harmless shape differences — strip them so the
+    equivalence check compares the numbers that actually matter."""
     out = dict(data)
-    for key in ("still_owed", "pending_amounts"):
-        out[key] = [{k: v for k, v in e.items() if k != "id"} for e in data[key]]
+    for key in ("still_owed", "pending_amounts", "remaining_var"):
+        out[key] = [{k: v for k, v in e.items() if k not in ("id", "paid")} for e in data[key]]
     return out
 
 

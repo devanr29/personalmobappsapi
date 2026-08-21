@@ -52,6 +52,38 @@ def test_create_transaction_decreases_remaining_and_daily_budget_in_response(cli
     repo.soft_delete_transaction(txn["id"])
 
 
+def test_create_transaction_reduces_category_remaining_in_breakdown(client, auth_headers, wallet_and_category):
+    # The mobile UI's inline "log spend" input has no direct assertion that
+    # a posted expense actually lands in GET /breakdown's remainingVar for
+    # that category — this closes that gap end to end.
+    wallet, category = wallet_and_category
+
+    before_breakdown = client.get("/api/budget/breakdown", headers=auth_headers).get_json()["data"]
+    before_free = before_breakdown["freeMoney"]
+
+    resp = client.post(
+        "/api/budget/transactions",
+        headers=auth_headers,
+        json={"amount": 50_000, "direction": "expense", "categoryId": category["id"], "walletId": wallet["id"]},
+    )
+    assert resp.status_code == 201
+    txn_id = resp.get_json()["data"]["transaction"]["id"]
+
+    after_breakdown = client.get("/api/budget/breakdown", headers=auth_headers).get_json()["data"]
+    line = next(v for v in after_breakdown["remainingVar"] if v["categoryId"] == category["id"])
+    assert line["spent"] == 50_000
+    assert line["remaining"] == 20_000  # 70_000 monthly_limit - 50_000 spent
+    # A spend with a walletId must not increase free money — the wallet
+    # balance drop and the category's remaining drop should offset each
+    # other (or, if the category was already overspent, only decrease it).
+    # A spend posted without a walletId would leave money_in_hand()
+    # untouched while totalVarRemaining still drops, incorrectly pushing
+    # freeMoney up instead.
+    assert after_breakdown["freeMoney"] <= before_free
+
+    repo.soft_delete_transaction(txn_id)
+
+
 def test_create_transaction_rejects_unknown_category(client, auth_headers, wallet_and_category):
     wallet, _ = wallet_and_category
     resp = client.post(
