@@ -36,8 +36,16 @@ app.register_blueprint(budget_bp, url_prefix="/api/budget")
 
 # ── DB + Scheduler ───────────────────────────────────────────────
 init_db()
-register_jobs()
-scheduler.start()
+
+# scheduler.py's jobs (reminder polling, budget alerts, daily quotes) are
+# not needed on a deploy you only hit on demand — and on a scale-to-zero
+# host, every cold start would otherwise spin up its own copy, which would
+# double-fire notifications against the same DB as your laptop. Defaults
+# ON so local behavior is unchanged; set ENABLE_SCHEDULER=0 on hosts where
+# you don't want it (e.g. Render).
+if os.environ.get("ENABLE_SCHEDULER", "1") != "0":
+    register_jobs()
+    scheduler.start()
 
 # ── tracer log ───────────────────────────────────────────────
 from tracer import new_trace, trace, logger, get_trace_id
