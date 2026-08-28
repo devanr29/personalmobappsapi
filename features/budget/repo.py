@@ -985,16 +985,6 @@ def soft_delete_transaction(txn_id):
     return get_transaction(txn_id)
 
 
-def restore_transaction(txn_id):
-    conn = db_conn()
-    conn.execute(
-        "UPDATE budget_transactions SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-        (str(now_jkt()), txn_id),
-    )
-    conn.commit()
-    conn.close()
-
-
 # ================================================================
 # AGGREGATES — for the insights/graphs layer. SQL only, no math (that
 # lives in insights.py, kept pure and DB-free the same way compute.py is).
@@ -1238,16 +1228,6 @@ def get_label(label_id):
     conn = db_conn()
     row = conn.execute("SELECT " + _LABEL_COLS + " FROM budget_labels WHERE id = ?", (label_id,)).fetchone()
     conn.close()
-    return _label_row(row) if row else None
-
-
-def get_label_by_name(name, conn=None):
-    owns_conn = conn is None
-    if owns_conn:
-        conn = db_conn()
-    row = conn.execute("SELECT " + _LABEL_COLS + " FROM budget_labels WHERE name = ?", (name,)).fetchone()
-    if owns_conn:
-        conn.close()
     return _label_row(row) if row else None
 
 

@@ -19,6 +19,7 @@ build/
 # Runtime / DB
 bot.db
 bot_all.log
+bot_all.log.pre-fix-archive
 
 # IDE
 .vscode/

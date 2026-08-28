@@ -6,7 +6,7 @@ truststore.inject_into_ssl()
 
 # At the top with your other imports
 import logging
-from tracer import new_trace, get_trace_id
+from tracer import get_trace_id
 
 import os
 from flask import Flask, request
@@ -48,7 +48,7 @@ if os.environ.get("ENABLE_SCHEDULER", "1") != "0":
     scheduler.start()
 
 # ── tracer log ───────────────────────────────────────────────
-from tracer import new_trace, trace, logger, get_trace_id
+from tracer import trace, logger, get_trace_id
 
 
 def _safe_int(value):

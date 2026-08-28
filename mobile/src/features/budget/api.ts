@@ -20,7 +20,6 @@ import type {
   Wallet,
   WalletPullSummary,
   WalletPushSummary,
-  WalletSyncCompare,
   WalletSyncPreview,
   WalletSyncStatus,
 } from "./types";
@@ -64,53 +63,6 @@ export function getCategoryPatterns(months = 12) {
 export function listWallets(includeArchived = false) {
   const qs = includeArchived ? "?includeArchived=1" : "";
   return apiClient.get<{ items: Wallet[] }>(`/api/budget/wallets${qs}`).then((r) => r.items);
-}
-
-export function createWallet(input: {
-  name: string;
-  kind?: string;
-  openingBalance?: number;
-  spendable?: boolean;
-  isDefault?: boolean;
-}) {
-  return apiClient.post<{ wallet: Wallet }>("/api/budget/wallets", input).then((r) => r.wallet);
-}
-
-export type UpdateWalletInput = Partial<{
-  name: string;
-  kind: string;
-  openingBalance: number;
-  spendable: boolean;
-  isDefault: boolean;
-  archived: boolean;
-}>;
-
-export function updateWallet(id: number, input: UpdateWalletInput) {
-  return apiClient.patch<{ wallet: Wallet }>(`/api/budget/wallets/${id}`, input).then((r) => r.wallet);
-}
-
-export function deleteWallet(id: number) {
-  return apiClient.delete<{ id: number; deleted: boolean }>(`/api/budget/wallets/${id}`);
-}
-
-export function transferBetweenWallets(input: {
-  fromWalletId: number;
-  toWalletId: number;
-  amount: number;
-  occurredAt?: string;
-  note?: string;
-}) {
-  return apiClient.post<{ transaction: Transaction; summary: BudgetSnapshot | null }>(
-    "/api/budget/wallets/transfer",
-    input,
-  );
-}
-
-export function reconcileWallet(id: number, actualBalance: number, note?: string) {
-  return apiClient.post<{ adjusted: boolean; delta: number; summary: BudgetSnapshot | null }>(
-    `/api/budget/wallets/${id}/reconcile`,
-    { actualBalance, note },
-  );
 }
 
 export function listCategories(kind?: "fixed" | "variable", includeArchived = false) {
@@ -204,10 +156,6 @@ export function unpayBill(id: number) {
   return apiClient.delete<{ bill: Bill; summary: BudgetSnapshot | null }>(`/api/budget/bills/${id}/pay`);
 }
 
-export function getSetupStatus() {
-  return apiClient.get<SetupStatus>("/api/budget/setup/status");
-}
-
 export function runSetup(input: SetupInput) {
   return apiClient.post<SetupResult>("/api/budget/setup", input);
 }
@@ -287,25 +235,6 @@ export function createGoal(input: {
   return apiClient.post<{ goal: Goal }>("/api/budget/goals", input).then((r) => r.goal);
 }
 
-export type UpdateGoalInput = Partial<{
-  name: string;
-  kind: GoalKind;
-  targetAmount: number;
-  targetDate: string | null;
-  monthlyContribution: number | null;
-  reserveFromFree: boolean;
-  walletId: number | null;
-  archived: boolean;
-}>;
-
-export function updateGoal(id: number, input: UpdateGoalInput) {
-  return apiClient.patch<{ goal: Goal }>(`/api/budget/goals/${id}`, input).then((r) => r.goal);
-}
-
-export function deleteGoal(id: number) {
-  return apiClient.delete<{ id: number; deleted: boolean }>(`/api/budget/goals/${id}`);
-}
-
 export function contributeToGoal(id: number, amount: number, walletId?: number) {
   return apiClient.post<{ goal: Goal; transaction: Transaction | null; summary: BudgetSnapshot | null }>(
     `/api/budget/goals/${id}/contribute`,
@@ -359,8 +288,4 @@ export function runWalletSync() {
   return apiClient.post<{ pull: WalletPullSummary; push: WalletPushSummary; summary: BudgetSnapshot | null }>(
     "/api/budget/sync/wallet",
   );
-}
-
-export function compareWalletSync() {
-  return apiClient.get<WalletSyncCompare>("/api/budget/sync/wallet/compare");
 }

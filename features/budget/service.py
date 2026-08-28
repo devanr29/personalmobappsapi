@@ -952,14 +952,6 @@ def delete_goal(goal_id):
     repo.delete_goal(goal_id)
 
 
-def get_goal_progress(goal_id):
-    goal = repo.get_goal(goal_id)
-    if goal is None:
-        raise BudgetNotFound(f"No goal with id {goal_id}.")
-    saved = repo.goal_saved(goal_id)
-    return goal, saved
-
-
 def contribute_to_goal(goal_id, amount, wallet_id=None, occurred_at=None):
     """If the goal has a wallet (ideally created spendable=False, a real
     sinking-fund account), the contribution is a transfer out of a

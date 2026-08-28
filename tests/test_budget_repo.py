@@ -81,9 +81,6 @@ def test_transaction_soft_delete_excludes_from_queries(repo, period_id):
     assert total == 0
     assert items == []
 
-    repo.restore_transaction(txn["id"])
-    assert repo.spend_by_category(category["id"], period_id) == 15_000
-
 
 def test_get_transactions_pagination_and_filters(repo, period_id):
     category = repo.create_category("Misc", "variable", monthly_limit=100_000)
