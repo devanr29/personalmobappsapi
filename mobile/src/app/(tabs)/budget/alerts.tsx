@@ -1,0 +1,140 @@
+import { useCallback, useState } from "react";
+import { Bell, Gear } from "phosphor-react-native";
+import { Pressable, ScrollView, Switch } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { Card } from "@/components/Card";
+import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
+import { ScreenHeader } from "@/components/ScreenHeader";
+import { Skeleton } from "@/components/Skeleton";
+import { getAlertPrefs, listAlerts, markAlertRead, updateAlertPrefs } from "@/features/budget/api";
+import type { Alert, AlertPrefs } from "@/features/budget/types";
+import { useResource } from "@/hooks/useResource";
+import { PressableScale } from "@/theme/motion";
+import { HStack, Stack, Text } from "@/theme/primitives";
+import { useTheme } from "@/theme/ThemeProvider";
+
+type AlertsResource = { alerts: Alert[]; unreadCount: number; prefs: AlertPrefs };
+
+export default function BudgetAlertsScreen() {
+  const theme = useTheme();
+  const [prefsOpen, setPrefsOpen] = useState(false);
+
+  const fetcher = useCallback(async (): Promise<AlertsResource> => {
+    const [{ items, unreadCount }, prefs] = await Promise.all([listAlerts(false, 30), getAlertPrefs()]);
+    return { alerts: items, unreadCount, prefs };
+  }, []);
+  const { data, loading, error, refetch } = useResource<AlertsResource>(fetcher, "Couldn't load alerts.");
+
+  const handleTapAlert = (alert: Alert) => {
+    if (alert.readAt) return;
+    markAlertRead(alert.id).finally(refetch);
+  };
+
+  const handlePrefChange = (patch: Partial<AlertPrefs>) => {
+    updateAlertPrefs(patch).finally(refetch);
+  };
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={["top"]}>
+      <ScreenHeader title="Alerts" />
+      {loading ? (
+        <Stack p={4} gap={3}>
+          <Skeleton height={80} radius={theme.radius.md} />
+          <Skeleton height={56} radius={theme.radius.md} />
+          <Skeleton height={56} radius={theme.radius.md} />
+        </Stack>
+      ) : error || !data ? (
+        <ErrorState message={error ?? "Couldn't load alerts."} onRetry={refetch} />
+      ) : (
+        <ScrollView contentContainerStyle={{ padding: theme.spacing[4], gap: theme.spacing[3] }}>
+          <Card>
+            <Stack gap={3}>
+              <PressableScale onPress={() => setPrefsOpen((v) => !v)} accessibilityRole="button" accessibilityLabel="Toggle alert settings">
+                <HStack align="center" gap={2}>
+                  <Gear size={16} color={theme.colors.accent} />
+                  <Text variant="label" tone="secondary" style={{ flex: 1 }}>
+                    Alert settings
+                  </Text>
+                  <Text variant="caption" tone="muted">
+                    {prefsOpen ? "Hide" : "Show"}
+                  </Text>
+                </HStack>
+              </PressableScale>
+              {prefsOpen ? (
+                <Stack gap={3}>
+                  <PrefRow
+                    label="Daily check-in"
+                    value={data.prefs.dailyCheckinEnabled}
+                    onChange={(v) => handlePrefChange({ dailyCheckinEnabled: v })}
+                  />
+                  <PrefRow
+                    label="Over-budget warnings"
+                    value={data.prefs.overBudgetEnabled}
+                    onChange={(v) => handlePrefChange({ overBudgetEnabled: v })}
+                  />
+                  <Text variant="caption" tone="faint">
+                    Bills alert {data.prefs.billDueLeadDays} day{data.prefs.billDueLeadDays === 1 ? "" : "s"} before due;
+                    over-budget triggers at {data.prefs.overBudgetThresholdPct}% of a category&rsquo;s limit.
+                  </Text>
+                </Stack>
+              ) : null}
+            </Stack>
+          </Card>
+
+          {data.alerts.length === 0 ? (
+            <EmptyState message="No alerts yet." IconComponent={Bell} />
+          ) : (
+            <Stack gap={2}>
+              {data.alerts.map((alert) => (
+                <AlertRow key={alert.id} alert={alert} onPress={() => handleTapAlert(alert)} />
+              ))}
+            </Stack>
+          )}
+        </ScrollView>
+      )}
+    </SafeAreaView>
+  );
+}
+
+function PrefRow({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  const theme = useTheme();
+  return (
+    <HStack align="center" justify="space-between">
+      <Text variant="label">{label}</Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: theme.colors.neutral[700], true: theme.colors.accent }}
+      />
+    </HStack>
+  );
+}
+
+function AlertRow({ alert, onPress }: { alert: Alert; onPress: () => void }) {
+  const theme = useTheme();
+  const isUnread = !alert.readAt;
+
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={alert.title}>
+      <Card>
+        <HStack gap={3} align="flex-start">
+          {isUnread ? (
+            <Stack mt={1.5} style={{ width: 8, height: 8, borderRadius: theme.radius.full, backgroundColor: theme.colors.accent }} />
+          ) : (
+            <Stack style={{ width: 8 }} />
+          )}
+          <Stack flex={1} gap={0.5}>
+            <Text variant="bodyStrong" tone={isUnread ? "primary" : "muted"}>
+              {alert.title}
+            </Text>
+            <Text variant="caption" tone="muted">
+              {alert.body}
+            </Text>
+          </Stack>
+        </HStack>
+      </Card>
+    </Pressable>
+  );
+}

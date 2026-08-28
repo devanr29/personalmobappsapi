@@ -25,9 +25,6 @@ bot_all.log
 .idea/
 *.swp
 
-# mobile/ has its own independent git repo
-mobile/
-
 Procfile
 refresh_token.py
 railway.toml
