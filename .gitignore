@@ -28,4 +28,3 @@ bot_all.log.pre-fix-archive
 
 Procfile
 refresh_token.py
-railway.toml
