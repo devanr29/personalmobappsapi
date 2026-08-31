@@ -112,6 +112,12 @@ def _set_record_progress(offset, running_max):
     state_set(_CURSOR_STATE_KEY, json.dumps(cursors))
 
 
+def _empty_pull_result() -> dict:
+    """The zero-work per-entity shape every _pull_X() returns — used to
+    stand in for an entity pull that's deliberately skipped this round."""
+    return {"created": 0, "updated": 0, "skipped": []}
+
+
 def _record_run(summary: dict):
     state_set(_LAST_RUN_STATE_KEY, json.dumps({
         "at": str(config.now_jkt()), "summary": summary,
@@ -377,12 +383,14 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
         params["updatedAt"] = f"gte.{cursor}"
     start_offset, carried_max = _get_record_progress() if apply else (0, None)
     max_updated = cursor or carried_max
-    # Smaller than the API's 200 max on purpose: the deadline is only
-    # checked at page boundaries, and each row is ~8 DB round-trips, so a
-    # 200-row page against a far-region DB could overrun both the request
-    # budget and gunicorn's --timeout before the first checkpoint.
+    # Far smaller than the API's 200 max on purpose: the deadline is only
+    # checked at page boundaries, and each row is ~8 DB round-trips (~50ms
+    # each when the app and Postgres are in different regions), so a page
+    # has to stay small enough that ONE of them finishes inside the request
+    # budget and gunicorn's --timeout. ~30 rows ≈ 15s in the slow case.
+    page_size = 30 if deadline is not None else 200
     for page, next_offset in client.paginate_pages(
-        "/v1/api/records", convertTo="IDR", start_offset=start_offset, page_size=100, **params
+        "/v1/api/records", convertTo="IDR", start_offset=start_offset, page_size=page_size, **params
     ):
         for record in page:
             remote_id = record["id"]
@@ -488,16 +496,29 @@ def pull_all(apply=True, max_seconds=None) -> dict:
         raise WalletNotConfigured("WALLET_API_TOKEN is not set.")
     cursors = _get_cursors()
     deadline = (time.monotonic() + max_seconds) if max_seconds else None
+
+    # Mid-backfill resume: accounts/categories/labels/goals/standing-orders
+    # were all drained on the first call (their cursors are set), and
+    # re-walking them every /pull round adds tens of seconds against a
+    # far-region DB for near-zero new rows. Skip straight to records until
+    # the history is in; the next full sync picks up anything added since.
+    resuming_backfill = apply and _get_record_progress()[0] > 0
+
     conn = db_conn()
     try:
-        summary = {
-            "accounts": _pull_accounts(client, cursors.get(ENTITY_ACCOUNT), apply=apply),
-            "categories": _pull_categories(client, cursors.get(ENTITY_CATEGORY), apply=apply),
-            "labels": _pull_labels(client, apply=apply),
-            "goals": _pull_goals(client, cursors.get(ENTITY_GOAL), apply=apply),
-            "bills": _pull_standing_orders(client, apply=apply),
-            "records": _pull_records(client, cursors.get(ENTITY_RECORD), get_payroll_day(), conn, apply=apply, deadline=deadline),
-        }
+        if resuming_backfill:
+            summary = {k: _empty_pull_result() for k in ("accounts", "categories", "labels", "goals", "bills")}
+        else:
+            summary = {
+                "accounts": _pull_accounts(client, cursors.get(ENTITY_ACCOUNT), apply=apply),
+                "categories": _pull_categories(client, cursors.get(ENTITY_CATEGORY), apply=apply),
+                "labels": _pull_labels(client, apply=apply),
+                "goals": _pull_goals(client, cursors.get(ENTITY_GOAL), apply=apply),
+                "bills": _pull_standing_orders(client, apply=apply),
+            }
+        summary["records"] = _pull_records(
+            client, cursors.get(ENTITY_RECORD), get_payroll_day(), conn, apply=apply, deadline=deadline
+        )
     finally:
         conn.close()
     if apply:

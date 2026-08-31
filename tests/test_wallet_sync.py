@@ -301,6 +301,38 @@ def test_pull_records_deadline_stops_at_page_boundary_and_resumes_by_offset():
         _cleanup_wallet(wallet["id"])
 
 
+def test_pull_all_skips_completed_entity_pulls_while_a_backfill_is_resuming(monkeypatch):
+    """Once a records backfill is mid-flight (offset persisted), a resumed
+    pull_all() call goes straight to /records — re-walking the five
+    already-drained entities every round just burns seconds against a
+    far-region DB."""
+    monkeypatch.setattr("features.budget.service.get_payroll_day", lambda: 25)
+
+    sync._set_record_progress(30, "2026-08-01T00:00:00Z")  # a backfill is in progress
+    calls = []
+
+    class FC:
+        def configured(self):
+            return True
+
+        def paginate(self, path, **params):
+            calls.append(path)
+            return []
+
+        def paginate_pages(self, path, start_offset=0, **params):
+            calls.append(path)
+            return [([], None)]  # nothing left -> records pull completes
+
+    monkeypatch.setattr(sync, "WalletClient", lambda: FC())
+
+    summary = sync.pull_all(apply=True, max_seconds=5)
+
+    assert calls == ["/v1/api/records"]  # the other five endpoints untouched
+    assert summary["accounts"] == {"created": 0, "updated": 0, "skipped": []}
+    assert summary["records"]["hasMore"] is False
+    assert sync._get_record_progress() == (0, None)  # drained -> progress cleared
+
+
 # ================================================================
 # PUSH — records
 # ================================================================
