@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ArrowClockwise, CloudArrowDown, CloudArrowUp, Eye } from "phosphor-react-native";
+import { ArrowClockwise, Eye } from "phosphor-react-native";
 import { ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -8,16 +8,9 @@ import { ErrorState } from "@/components/ErrorState";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { Skeleton } from "@/components/Skeleton";
 import { useBudgetRevision } from "@/features/budget/BudgetProvider";
-import {
-  getWalletSyncStatus,
-  previewWalletSync,
-  pullWalletSync,
-  pushWalletSync,
-  runWalletSync,
-} from "@/features/budget/api";
+import { getWalletSyncStatus, previewWalletSync, pullWalletSync } from "@/features/budget/api";
 import type {
   WalletPullSummary,
-  WalletPushSummary,
   WalletSyncEntityResult,
   WalletSyncStatus,
 } from "@/features/budget/types";
@@ -26,7 +19,7 @@ import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 
-type LastResult = { pull?: WalletPullSummary; push?: WalletPushSummary } | null;
+type LastResult = { pull?: WalletPullSummary } | null;
 
 export default function BudgetWalletSyncScreen() {
   const theme = useTheme();
@@ -64,8 +57,9 @@ export default function BudgetWalletSyncScreen() {
       ) : (
         <ScrollView contentContainerStyle={{ padding: theme.spacing[4], gap: theme.spacing[3] }}>
           <Text variant="caption" tone="faint">
-            Two-way sync against Wallet by BudgetBakers. Goals and recurring bills only ever flow in from
-            Wallet — it has no API to write them back.
+            One-way pull from Wallet by BudgetBakers — nothing is ever sent out. Sync brings in your
+            account balances and transactions only. Budgets, bills and goals are set up here in the app
+            and are never touched by a sync.
           </Text>
 
           {!data.configured ? (
@@ -92,25 +86,11 @@ export default function BudgetWalletSyncScreen() {
                     onPress={() => runAction("preview", () => previewWalletSync())}
                   />
                   <ActionRow
-                    IconComponent={CloudArrowDown}
-                    label="Pull"
-                    description="Bring changes in from Wallet."
-                    busy={busy === "pull"}
-                    onPress={() => runAction("pull", () => pullWalletSync().then((r) => ({ pull: r.pull })))}
-                  />
-                  <ActionRow
-                    IconComponent={CloudArrowUp}
-                    label="Push"
-                    description="Send local changes out to Wallet."
-                    busy={busy === "push"}
-                    onPress={() => runAction("push", () => pushWalletSync().then((r) => ({ push: r.push })))}
-                  />
-                  <ActionRow
                     IconComponent={ArrowClockwise}
-                    label="Sync now"
-                    description="Pull, then push."
+                    label="Sync"
+                    description="Bring balances and transactions in from Wallet."
                     busy={busy === "sync"}
-                    onPress={() => runAction("sync", () => runWalletSync().then((r) => ({ pull: r.pull, push: r.push ?? undefined })))}
+                    onPress={() => runAction("sync", () => pullWalletSync().then((r) => ({ pull: r.pull })))}
                   />
                 </Stack>
               </Card>
@@ -126,8 +106,8 @@ export default function BudgetWalletSyncScreen() {
               {lastResult?.pull?.records?.hasMore ? (
                 <Card>
                   <Text variant="label" tone="secondary">
-                    Still catching up — Wallet has more history to page in. Tap Pull (or Sync now) again to
-                    continue; each run resumes where the last one stopped.
+                    Still catching up — Wallet has more history to page in. Tap Sync again to continue;
+                    each run resumes where the last one stopped.
                   </Text>
                 </Card>
               ) : null}
@@ -143,7 +123,11 @@ export default function BudgetWalletSyncScreen() {
 
 function StatusCard({ data }: { data: WalletSyncStatus }) {
   const theme = useTheme();
-  const expiresSoon = data.tokenExpiresAt ? new Date(data.tokenExpiresAt).getTime() - Date.now() < 14 * 86_400_000 : false;
+  // Read the clock once per mount via a lazy initializer rather than on
+  // every render — Date.now() in the render body is impure (react-hooks/purity),
+  // and "expires within 14 days" doesn't need to track re-renders anyway.
+  const [now] = useState(() => Date.now());
+  const expiresSoon = data.tokenExpiresAt ? new Date(data.tokenExpiresAt).getTime() - now < 14 * 86_400_000 : false;
 
   return (
     <Card>
@@ -220,11 +204,9 @@ function ActionRow({
 }
 
 function ResultCard({ result }: { result: LastResult }) {
-  const theme = useTheme();
   if (!result) return null;
   const sections: [string, Record<string, WalletSyncEntityResult>][] = [];
   if (result.pull) sections.push(["Pulled", result.pull as unknown as Record<string, WalletSyncEntityResult>]);
-  if (result.push) sections.push(["Pushed", result.push as unknown as Record<string, WalletSyncEntityResult>]);
 
   return (
     <Card>
@@ -243,9 +225,7 @@ function ResultCard({ result }: { result: LastResult }) {
                 <Text variant="caption" numeric>
                   +{r.created}
                   {r.updated !== undefined ? ` / ~${r.updated}` : ""}
-                  {r.deleted ? ` / -${r.deleted}` : ""}
                   {r.skipped.length ? ` / ${r.skipped.length} skipped` : ""}
-                  {r.errors?.length ? ` / ${r.errors.length} errors` : ""}
                 </Text>
               </HStack>
             ))}
@@ -255,14 +235,6 @@ function ResultCard({ result }: { result: LastResult }) {
               .map((skip, i) => (
                 <Text key={i} variant="caption" tone="faint">
                   · {skip.reason}
-                </Text>
-              ))}
-            {Object.values(entities)
-              .flatMap((r) => r.errors ?? [])
-              .slice(0, 5)
-              .map((err, i) => (
-                <Text key={i} variant="caption" style={{ color: theme.status.short }}>
-                  · {err.reason}
                 </Text>
               ))}
           </Stack>

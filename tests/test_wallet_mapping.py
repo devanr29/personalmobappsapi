@@ -60,15 +60,6 @@ def test_record_category_id_none_when_absent():
     assert mapping.record_category_id({}) is None
 
 
-def test_record_label_ids_filters_and_extracts():
-    record = {"labels": [{"id": "l1"}, "l2", None]}
-    assert mapping.record_label_ids(record) == ["l1", "l2"]
-
-
-def test_record_label_ids_empty_when_absent():
-    assert mapping.record_label_ids({}) == []
-
-
 # ================================================================
 # restricted categories
 # ================================================================
@@ -110,98 +101,14 @@ def test_account_to_wallet_fields_missing_balance_defaults_to_zero():
     assert fields["opening_balance"] == 0
 
 
-def test_wallet_to_account_payload_is_always_idr():
-    wallet = {"name": "Cash", "kind": "cash", "opening_balance": 100000}
-    payload = mapping.wallet_to_account_payload(wallet)
-    assert payload["currencyCode"] == "IDR"
-    assert payload["accountType"] == "Cash"
-    assert payload["initialBalance"] == 100000
-
-
 # ================================================================
-# categories
-# ================================================================
-def test_category_to_local_fields_must_and_need_become_fixed():
-    assert mapping.category_to_local_fields({"name": "Rent", "cardinality": "must"})["kind"] == "fixed"
-    assert mapping.category_to_local_fields({"name": "Insurance", "cardinality": "need"})["kind"] == "fixed"
-
-
-def test_category_to_local_fields_want_becomes_variable():
-    assert mapping.category_to_local_fields({"name": "Games", "cardinality": "want"})["kind"] == "variable"
-
-
-def test_local_category_to_custom_payload_uses_given_parent():
-    category = {"name": "Subscriptions", "kind": "variable"}
-    payload = mapping.local_category_to_custom_payload(category, parent_id="parent-uuid")
-    assert payload["parentId"] == "parent-uuid"
-    assert payload["cardinality"] == "want"
-
-
-# ================================================================
-# standing orders -> bills
-# ================================================================
-def test_standing_order_to_bill_fields_extracts_due_day():
-    order = {"name": "Netflix", "amount": 120000, "dueDate": "2026-08-15", "recurrenceRule": "FREQ=MONTHLY;INTERVAL=1"}
-    fields = mapping.standing_order_to_bill_fields(order)
-    assert fields["due_day"] == 15
-    assert fields["cadence"] == "monthly"
-    assert fields["amount"] == 120000
-
-
-def test_standing_order_to_bill_fields_weekly_cadence():
-    order = {"name": "Gym", "amount": 50000, "recurrenceRule": "FREQ=WEEKLY"}
-    assert mapping.standing_order_to_bill_fields(order)["cadence"] == "weekly"
-
-
-# ================================================================
-# goals — targetAmount is a MonetaryAmount object on the live API, not a
-# bare number (confirmed 2026-08-12: {"value": 4000000, "currencyCode":
+# round_idr — the live API returns MonetaryAmount objects, not bare
+# numbers (confirmed 2026-08-12: {"value": 4000000, "currencyCode":
 # "IDR"}), which round_idr() must unwrap rather than crash on.
 # ================================================================
-def test_goal_to_local_fields_unwraps_monetary_amount_object():
-    goal = {"id": "g1", "name": "Emergency fund", "targetAmount": {"value": 16000000, "currencyCode": "IDR"}, "state": "active"}
-    fields = mapping.goal_to_local_fields(goal)
-    assert fields["target_amount"] == 16000000
-    assert fields["archived"] is False
-
-
-def test_goal_to_local_fields_reached_state_is_archived():
-    goal = {"id": "g1", "name": "Timberland", "targetAmount": {"value": 4000000}, "state": "reached"}
-    assert mapping.goal_to_local_fields(goal)["archived"] is True
-
-
 def test_round_idr_accepts_bare_number_or_monetary_object():
     assert mapping.round_idr(120000) == 120000
     assert mapping.round_idr({"value": 120000, "currencyCode": "IDR"}) == 120000
     assert mapping.round_idr({"currencyCode": "IDR"}) == 0
     assert mapping.round_idr(None) == 0
 
-
-# ================================================================
-# push payloads
-# ================================================================
-def test_transaction_to_record_payload_negates_expense_amount():
-    txn = {"amount": 30000, "direction": "expense", "occurred_at": "2026-08-01 09:00", "note": "Lunch"}
-    payload = mapping.transaction_to_record_payload(txn, account_id="acc-1", category_id="cat-1")
-    assert payload["amount"] == -30000
-    assert payload["accountId"] == "acc-1"
-    assert payload["categoryId"] == "cat-1"
-    assert payload["note"] == "Lunch"
-    assert payload["recordDate"] == "2026-08-01T09:00:00Z"
-
-
-def test_transaction_to_record_payload_keeps_income_positive():
-    txn = {"amount": 500000, "direction": "income", "occurred_at": "2026-08-01 09:00"}
-    payload = mapping.transaction_to_record_payload(txn, account_id="acc-1")
-    assert payload["amount"] == 500000
-    assert "categoryId" not in payload
-
-
-def test_transaction_to_record_patch_only_includes_changed_metadata():
-    txn = {"note": "Updated note"}
-    patch = mapping.transaction_to_record_patch(txn, category_id="cat-2", label_ids=["l1"])
-    assert patch == {"categoryId": "cat-2", "note": "Updated note", "labelIds": ["l1"]}
-
-
-def test_transaction_to_record_patch_empty_when_nothing_to_change():
-    assert mapping.transaction_to_record_patch({}) == {}

@@ -1,4 +1,4 @@
-"""Exercises features/budget/wallet/sync.py's private per-entity pull/push
+"""Exercises features/budget/wallet/sync.py's private per-entity pull
 functions against an isolated throwaway DB (see _isolated_db below) — every
 row created here is also torn down in a finally block, belt-and-suspenders,
 but the isolation is what actually matters: _pull_accounts()/_pull_records()
@@ -18,8 +18,8 @@ from features.budget.wallet import mapping, sync
 def _isolated_db(tmp_path, monkeypatch):
     """Same recipe as tests/test_budget_schema.py's tmp_db and
     tests/test_budget_alerts.py's budget_env fixtures, applied file-wide via
-    autouse so every test below — including direct sync._pull_*()/_push_*()
-    calls that never go through the client fixture — gets a fresh SQLite
+    autouse so every test below — including direct sync._pull_*() calls
+    that never go through the client fixture — gets a fresh SQLite
     file instead of the real bot.db."""
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("DATABASE_URL", "")
@@ -41,12 +41,11 @@ def _isolated_db(tmp_path, monkeypatch):
 
 
 class FakeClient:
-    def __init__(self, pages=None, post_response=None):
+    """Reads only — WalletClient has no write method to stand in for."""
+
+    def __init__(self, pages=None):
         self.pages = pages or {}
-        self.post_calls = []
-        self.patch_calls = []
         self.paginate_calls = []
-        self.post_response = post_response if post_response is not None else {"id": "remote-created-1"}
 
     def paginate(self, path, **params):
         self.paginate_calls.append((path, params))
@@ -55,14 +54,6 @@ class FakeClient:
     def paginate_pages(self, path, start_offset=0, **params):
         self.paginate_calls.append((path, params))
         return [(list(self.pages.get(path, [])), None)]
-
-    def post(self, path, body):
-        self.post_calls.append((path, body))
-        return self.post_response
-
-    def patch(self, path, body):
-        self.patch_calls.append((path, body))
-        return {}
 
     def configured(self):
         return True
@@ -110,31 +101,6 @@ def test_pull_accounts_skips_non_idr_currency():
     assert result["created"] == 0
     assert len(result["skipped"]) == 1
     assert repo.get_link_by_remote(sync.ENTITY_ACCOUNT, "acc-remote-usd") is None
-
-
-# ================================================================
-# PULL — categories
-# ================================================================
-def test_pull_categories_skips_restricted_system_category():
-    category = {"id": mapping.WALLET_TRANSFER_CATEGORY_ID, "name": "Transfer", "cardinality": "none"}
-    client = FakeClient(pages={"/v1/api/categories": [category]})
-    result = sync._pull_categories(client, cursor=None, apply=True)
-    assert result["created"] == 0
-    assert len(result["skipped"]) == 1
-    assert repo.get_link_by_remote(sync.ENTITY_CATEGORY, mapping.WALLET_TRANSFER_CATEGORY_ID) is None
-
-
-def test_pull_categories_creates_local_category():
-    category = {"id": "cat-remote-1", "name": "_TestWalletSyncCategory", "cardinality": "want"}
-    client = FakeClient(pages={"/v1/api/categories": [category]})
-    result = sync._pull_categories(client, cursor=None, apply=True)
-    link = repo.get_link_by_remote(sync.ENTITY_CATEGORY, "cat-remote-1")
-    try:
-        assert result["created"] == 1
-        assert repo.get_category(link["local_id"])["kind"] == "variable"
-    finally:
-        if link:
-            _cleanup_category(link["local_id"])
 
 
 # ================================================================
@@ -205,21 +171,27 @@ def test_pull_records_creates_transaction_with_correct_period():
         _cleanup_wallet(wallet["id"])
 
 
-def test_pull_records_does_not_clobber_an_unpushed_local_edit():
+def test_pull_overwrites_money_but_never_the_local_category():
+    """The conflict rule now that push is gone: Wallet owns the money
+    (amount / date / direction / wallet / note), the app owns the budget
+    filing (category_id, bill_id). A pull that re-sent category_id would
+    blank whatever was filed by hand — and since categories are no longer
+    pulled it would blank it to NULL on every single sync. There is also
+    no "local edit not yet pushed" skip any more: money is never frozen."""
     wallet = repo.create_wallet("_TestWalletSyncEditWallet", opening_balance=0)
     repo.upsert_link(sync.ENTITY_ACCOUNT, wallet["id"], "acc-remote-3", local_synced_at="2020-01-01")
+    category = repo.create_category("_TestWalletSyncManualCat", "variable", monthly_limit=50_000)
 
     txn = repo.create_transaction(amount=10000, direction="expense", wallet_id=wallet["id"], occurred_at="2026-08-01 09:00")
-    # Link was "synced" in the past; the local row is then edited (which
-    # stamps a fresh updated_at) — simulating an edit made after the last
-    # sync but not yet pushed back to Wallet.
     repo.upsert_link(sync.ENTITY_RECORD, txn["id"], "rec-3", local_synced_at="2020-01-01T00:00:00")
-    repo.update_transaction(txn["id"], note="edited locally, not yet pushed")
+    # Filed by hand in the app after the last sync — exactly what the
+    # "Attach an existing transaction" affordance does.
+    repo.update_transaction(txn["id"], category_id=category["id"])
 
     record = {
         "id": "rec-3", "accountId": "acc-remote-3",
         "convertedAmount": {"value": -99999}, "recordDate": "2026-08-01T00:00:00Z",
-        "updatedAt": "2026-08-01T00:00:01Z",
+        "updatedAt": "2026-08-01T00:00:01Z", "note": "_TestWalletSyncNoteFromWallet",
     }
     client = FakeClient(pages={"/v1/api/records": [record]})
     conn = db_conn()
@@ -229,13 +201,15 @@ def test_pull_records_does_not_clobber_an_unpushed_local_edit():
         conn.close()
 
     try:
-        assert result["updated"] == 0
-        assert len(result["skipped"]) == 1
-        assert "not yet pushed" in result["skipped"][0]["reason"]
-        # local edit must survive untouched
-        assert repo.get_transaction(txn["id"])["amount"] == 10000
+        assert result["updated"] == 1
+        assert result["skipped"] == []
+        after = repo.get_transaction(txn["id"])
+        assert after["amount"] == 99999                    # Wallet won on money
+        assert after["note"] == "_TestWalletSyncNoteFromWallet"
+        assert after["category_id"] == category["id"]      # the app kept the filing
     finally:
         _cleanup_transaction(txn["id"])
+        repo.delete_category(category["id"])
         _cleanup_wallet(wallet["id"])
 
 
@@ -303,9 +277,9 @@ def test_pull_records_deadline_stops_at_page_boundary_and_resumes_by_offset():
 
 def test_pull_all_skips_completed_entity_pulls_while_a_backfill_is_resuming(monkeypatch):
     """Once a records backfill is mid-flight (offset persisted), a resumed
-    pull_all() call goes straight to /records — re-walking the five
-    already-drained entities every round just burns seconds against a
-    far-region DB."""
+    pull_all() call goes straight to /records — re-walking the already-
+    drained accounts every round just burns seconds against a far-region
+    DB."""
     monkeypatch.setattr("features.budget.service.get_payroll_day", lambda: 25)
 
     sync._set_record_progress(30, "2026-08-01T00:00:00Z")  # a backfill is in progress
@@ -327,67 +301,7 @@ def test_pull_all_skips_completed_entity_pulls_while_a_backfill_is_resuming(monk
 
     summary = sync.pull_all(apply=True, max_seconds=5)
 
-    assert calls == ["/v1/api/records"]  # the other five endpoints untouched
+    assert calls == ["/v1/api/records"]  # /accounts untouched
     assert summary["accounts"] == {"created": 0, "updated": 0, "skipped": []}
     assert summary["records"]["hasMore"] is False
     assert sync._get_record_progress() == (0, None)  # drained -> progress cleared
-
-
-# ================================================================
-# PUSH — records
-# ================================================================
-def test_push_records_creates_remote_record_for_new_local_transaction():
-    wallet = repo.create_wallet("_TestWalletSyncPushWallet", opening_balance=0)
-    repo.upsert_link(sync.ENTITY_ACCOUNT, wallet["id"], "acc-remote-push-1", local_synced_at="2020-01-01")
-    txn = repo.create_transaction(amount=15000, direction="expense", wallet_id=wallet["id"], occurred_at="2026-08-01 10:00", note="_TestPush")
-
-    client = FakeClient(post_response={"id": "remote-record-created"})
-    result = sync._push_records(client, apply=True)
-
-    link = repo.get_link_by_local(sync.ENTITY_RECORD, txn["id"])
-    try:
-        assert result["created"] == 1
-        assert len(client.post_calls) == 1
-        path, body = client.post_calls[0]
-        assert path == "/v1/api/records"
-        assert body[0]["amount"] == -15000
-        assert body[0]["accountId"] == "acc-remote-push-1"
-        assert link is not None
-        assert link["remote_id"] == "remote-record-created"
-    finally:
-        if link:
-            repo.delete_link(sync.ENTITY_RECORD, txn["id"])
-        _cleanup_transaction(txn["id"])
-        _cleanup_wallet(wallet["id"])
-
-
-def test_push_records_reports_transfer_direction_as_skipped_not_silent():
-    wallet_a = repo.create_wallet("_TestWalletSyncTransferA", opening_balance=0)
-    wallet_b = repo.create_wallet("_TestWalletSyncTransferB", opening_balance=0)
-    txn = repo.create_transaction(
-        amount=5000, direction="transfer", wallet_id=wallet_a["id"], transfer_wallet_id=wallet_b["id"],
-        occurred_at="2026-08-01 10:00",
-    )
-    client = FakeClient()
-    try:
-        result = sync._push_records(client, apply=True)
-        assert result["created"] == 0
-        assert any(s["localId"] == txn["id"] for s in result["skipped"])
-        assert client.post_calls == []
-    finally:
-        _cleanup_transaction(txn["id"])
-        _cleanup_wallet(wallet_a["id"])
-        _cleanup_wallet(wallet_b["id"])
-
-
-def test_push_records_skips_when_wallet_not_yet_linked():
-    wallet = repo.create_wallet("_TestWalletSyncUnlinked", opening_balance=0)
-    txn = repo.create_transaction(amount=2000, direction="expense", wallet_id=wallet["id"], occurred_at="2026-08-01 10:00")
-    client = FakeClient()
-    try:
-        result = sync._push_records(client, apply=True)
-        assert result["created"] == 0
-        assert any(s["localId"] == txn["id"] and "push accounts first" in s["reason"] for s in result["skipped"])
-    finally:
-        _cleanup_transaction(txn["id"])
-        _cleanup_wallet(wallet["id"])

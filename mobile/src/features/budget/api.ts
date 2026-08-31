@@ -13,13 +13,11 @@ import type {
   GoalKind,
   SetupInput,
   SetupResult,
-  SetupStatus,
   Transaction,
   TransactionDirection,
   TransactionsPage,
   Wallet,
   WalletPullSummary,
-  WalletPushSummary,
   WalletSyncEntityResult,
   WalletSyncPreview,
   WalletSyncStatus,
@@ -269,8 +267,10 @@ export function updateAlertPrefs(input: Partial<AlertPrefs>) {
 }
 
 // ================================================================
-// WALLET SYNC — manual-trigger two-way sync against Wallet by
+// WALLET SYNC — manual-trigger one-directional pull from Wallet by
 // BudgetBakers. See features/budget/wallet/ and docs/BUDGETBAKERS_API.md.
+// Nothing is ever sent out: the server has no push route and its HTTP
+// client has no write method, so there is no pushWalletSync() here.
 // ================================================================
 export function getWalletSyncStatus() {
   return apiClient.get<WalletSyncStatus>("/api/budget/sync/wallet/status");
@@ -288,7 +288,7 @@ export function previewWalletSync() {
 // abort). Keep calling until it's caught up; each call resumes from the
 // server-side per-page cursor. The cap is a safety stop against an
 // unbounded spinner — when it's hit, the returned records.hasMore stays
-// true so the caller can tell the user to run Pull again (each run picks
+// true so the caller can tell the user to run Sync again (each run picks
 // up from where the last one stopped).
 const SYNC_MAX_ROUNDS = 40;
 
@@ -296,7 +296,6 @@ function accumulateRecords(into: WalletSyncEntityResult, from: WalletSyncEntityR
   into.created += from.created ?? 0;
   into.updated = (into.updated ?? 0) + (from.updated ?? 0);
   into.skipped = [...into.skipped, ...(from.skipped ?? [])];
-  if (from.errors?.length) into.errors = [...(into.errors ?? []), ...from.errors];
 }
 
 export async function pullWalletSync(): Promise<{ pull: WalletPullSummary; summary: BudgetSnapshot | null }> {
@@ -315,37 +314,7 @@ export async function pullWalletSync(): Promise<{ pull: WalletPullSummary; summa
     if (!hasMore) break;
   }
   // hasMore is true here only if SYNC_MAX_ROUNDS ran out with history still
-  // paging in — surfaced truthfully so the caller can prompt another Pull.
-  last!.pull.records = { ...records, hasMore };
-  return last!;
-}
-
-export function pushWalletSync() {
-  return apiClient.post<{ push: WalletPushSummary }>("/api/budget/sync/wallet/push", undefined, {
-    timeoutMs: LONG_REQUEST_TIMEOUT_MS,
-  });
-}
-
-export async function runWalletSync(): Promise<{
-  pull: WalletPullSummary;
-  push: WalletPushSummary | null;
-  summary: BudgetSnapshot | null;
-}> {
-  let last: { pull: WalletPullSummary; push: WalletPushSummary | null; summary: BudgetSnapshot | null } | null = null;
-  const records: WalletSyncEntityResult = { created: 0, updated: 0, skipped: [] };
-  let hasMore = false;
-  for (let round = 0; round < SYNC_MAX_ROUNDS; round++) {
-    const res = await apiClient.post<{
-      pull: WalletPullSummary;
-      push: WalletPushSummary | null;
-      summary: BudgetSnapshot | null;
-    }>("/api/budget/sync/wallet", undefined, { timeoutMs: LONG_REQUEST_TIMEOUT_MS });
-    accumulateRecords(records, res.pull.records);
-    last = res;
-    hasMore = !!res.pull.records.hasMore;
-    if (!hasMore) break;
-  }
-  // See pullWalletSync: a true here means the round cap was hit mid-backfill.
+  // paging in — surfaced truthfully so the caller can prompt another Sync.
   last!.pull.records = { ...records, hasMore };
   return last!;
 }

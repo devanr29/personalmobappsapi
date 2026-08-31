@@ -382,9 +382,10 @@ export interface AlertPrefs {
 }
 
 // ================================================================
-// WALLET SYNC — two-way sync against Wallet by BudgetBakers. Mirrors
+// WALLET SYNC — one-directional pull from Wallet by BudgetBakers. Mirrors
 // features/budget/wallet/sync.py's return shapes (already camelCase-keyed
-// on the backend, no snake_case translation needed here).
+// on the backend, no snake_case translation needed here). Nothing is ever
+// sent out: there is no push summary because there is no push.
 // ================================================================
 export interface WalletSyncSkip {
   remoteId?: string;
@@ -396,28 +397,18 @@ export interface WalletSyncSkip {
 export interface WalletSyncEntityResult {
   created: number;
   updated?: number;
-  deleted?: number;
   skipped: WalletSyncSkip[];
-  errors?: { localId?: number; localIds?: number[]; reason: string }[];
   // Records pull only: the server bounded this call to a time budget and
   // stopped at a page boundary — more history remains. pullWalletSync()
   // keeps calling until this is false.
   hasMore?: boolean;
 }
 
+/** Money status only. Wallet's own categories, labels, goals and
+ *  standing-orders are deliberately not pulled — budget structure is
+ *  configured by hand in the app. See sync.py's module docstring. */
 export interface WalletPullSummary {
   accounts: WalletSyncEntityResult;
-  categories: WalletSyncEntityResult;
-  labels: WalletSyncEntityResult;
-  goals: WalletSyncEntityResult;
-  bills: WalletSyncEntityResult;
-  records: WalletSyncEntityResult;
-}
-
-export interface WalletPushSummary {
-  wallets: WalletSyncEntityResult;
-  categories: WalletSyncEntityResult;
-  labels: WalletSyncEntityResult;
   records: WalletSyncEntityResult;
 }
 
@@ -434,7 +425,6 @@ export interface WalletSyncStatus {
 
 export interface WalletSyncPreview {
   pull: WalletPullSummary;
-  push: WalletPushSummary;
 }
 
 export interface WalletSyncCompare {

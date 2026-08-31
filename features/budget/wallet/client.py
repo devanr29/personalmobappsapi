@@ -3,7 +3,7 @@
 
 No sync logic here — this only knows how to make one HTTP call correctly:
 auth header, pagination, rate-limit tracking, and mapping the vendor's
-error shapes (401 / 409 init-sync / 429 / 207 partial-success) onto the
+error shapes (401 / 409 init-sync / 429) onto the
 typed errors in features/budget/errors.py. features/budget/wallet/sync.py
 is the only caller.
 
@@ -11,11 +11,14 @@ The BETA API's exact list-response envelope wasn't fully confirmed against
 the live spec (a `nextOffset`-bearing PaginatedResponse object exists, but
 whether it sits at the top level or nested under a `meta` key wasn't
 pinned down) — extract_items()/extract_next_offset() below handle both
-shapes defensively rather than assuming one. Batch write endpoints
-(POST/PATCH /records, PATCH /accounts|categories|labels|budgets) are
-assumed to take a raw JSON array as the body — verify with
-POST /sync/wallet/preview against a couple of real records before trusting
-a full push."""
+shapes defensively rather than assuming one.
+
+READ-ONLY. This client can only issue GETs — there is no post/patch/delete
+method, and _request() hard-codes the verb. That is the enforcement point
+for "this app never writes to Wallet" (see sync.py's module docstring):
+outbound writes aren't disabled by convention or left as an unused code
+path, they're absent. The batch write endpoints were never confirmed
+against the live spec anyway."""
 import logging
 import time
 
@@ -87,30 +90,6 @@ def extract_next_offset(body):
     return None
 
 
-def _as_dict_with_id(value):
-    return value.get("id") if isinstance(value, dict) and "id" in value else None
-
-
-def extract_created_id(body):
-    """Pulls the new entity's id out of a create response, whichever of
-    the plausible BETA-API envelopes it turns out to be: a 207
-    partial-success body ({"results": [{"success": true, "data": {...}}]}),
-    a bare created object ({"id": ...} or {"data": {"id": ...}}), or that
-    object wrapped in a single-element list. Returns None (never raises)
-    when nothing recognizable is found — callers treat that as
-    'record the failure, don't link'. See this module's docstring: the
-    exact create-response shape wasn't confirmed against the live spec."""
-    if isinstance(body, dict):
-        results = body.get("results")
-        if isinstance(results, list) and results and results[0].get("success"):
-            item = results[0]
-            return _as_dict_with_id(item.get("data")) or _as_dict_with_id(item)
-        return _as_dict_with_id(body) or _as_dict_with_id(body.get("data"))
-    if isinstance(body, list) and body:
-        return _as_dict_with_id(body[0])
-    return None
-
-
 class WalletClient:
     def __init__(self, token=None, base_url=None, session=None, rate_limit_reserve=_DEFAULT_RATE_LIMIT_RESERVE):
         self.token = token if token is not None else config.WALLET_API_TOKEN
@@ -145,7 +124,8 @@ class WalletClient:
         if sync_flag is not None:
             self.sync_in_progress = sync_flag.lower() == "true"
 
-    def _request(self, method, path, params=None, json_body=None):
+    def _request(self, path, params=None):
+        method = "GET"  # the only verb this client speaks — see module docstring
         if not self.configured():
             raise WalletNotConfigured(
                 "WALLET_API_TOKEN is not set — mint a token in the Wallet web app "
@@ -162,9 +142,9 @@ class WalletClient:
 
         started = time.monotonic()
         try:
-            resp = self.session.request(
-                method, self.base_url + path, headers=self._headers(),
-                params=params, json=json_body, timeout=_TIMEOUT,
+            resp = self.session.get(
+                self.base_url + path, headers=self._headers(),
+                params=params, timeout=_TIMEOUT,
             )
         except requests.RequestException as e:
             elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -194,9 +174,9 @@ class WalletClient:
             raise WalletRequestError(f"{method} {path} -> 409: {body}")
         if resp.status_code == 429:
             raise WalletRateLimited("Wallet API returned 429 Too Many Requests.")
-        if resp.status_code in (200, 207):
+        if resp.status_code == 200:
             return _safe_json(resp)
-        if resp.status_code in (201, 204):
+        if resp.status_code == 204:
             return _safe_json(resp) or {}
 
         raise WalletRequestError(f"{method} {path} -> {resp.status_code}: {_safe_json(resp)}")
@@ -206,7 +186,7 @@ class WalletClient:
     # ------------------------------------------------------------
     def get(self, path, **params):
         params = {k: v for k, v in params.items() if v is not None}
-        return self._request("GET", path, params=params)
+        return self._request(path, params=params)
 
     def paginate(self, path, page_size=200, **params):
         """Yields items one at a time across every page. page_size caps at
@@ -239,24 +219,6 @@ class WalletClient:
             if next_offset is None:
                 return
             offset = next_offset
-
-    # ------------------------------------------------------------
-    # Writes
-    # ------------------------------------------------------------
-    def post(self, path, body):
-        return self._request("POST", path, json_body=body)
-
-    def patch(self, path, body):
-        return self._request("PATCH", path, json_body=body)
-
-    def delete_batch(self, entity_type, ids):
-        """DELETE /v1/api/{type} with a body of {"ids": [...]}, per
-        docs/BUDGETBAKERS_API.md's 'Deleting Entities' section."""
-        return self._request("DELETE", f"/v1/api/{entity_type}", json_body={"ids": list(ids)})
-
-    def references(self, entity_type, ids):
-        ids = list(ids)[:10]
-        return self.get(f"/v1/api/{entity_type}/references", id=",".join(ids))
 
 
 def _safe_json(resp):

@@ -1,10 +1,11 @@
 """One-time seed for the user's real variable budget envelopes.
 
-Wallet-sync only ever writes name/kind/archived on a linked category
-(features/budget/wallet/mapping.py:category_to_local_fields) and never
-touches monthly_limit, so these rows are safe from being reverted by a
-future sync — see service.py's build_period_view() comment on why
-monthly_limit is the durable "this is a real budget" signal.
+Wallet-sync no longer pulls categories at all (see
+features/budget/wallet/sync.py's module docstring), so these rows can't be
+touched by a sync — and even before that it only ever wrote
+name/kind/archived, never monthly_limit. See service.py's
+build_period_view() comment on why monthly_limit is the durable
+"this is a real budget" signal.
 
 Idempotent: find-or-create by (name, kind='variable'), then set
 monthly_limit if it differs. Safe to re-run.

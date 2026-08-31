@@ -1,41 +1,40 @@
-"""Orchestrates two-way sync between the local budget ledger and Wallet by
-BudgetBakers. client.py is the HTTP transport, mapping.py is the pure field
+"""Pulls money data from Wallet by BudgetBakers into the local budget
+ledger. client.py is the HTTP transport, mapping.py is the pure field
 conversion; this module is the only place that combines them with repo.py
 reads/writes. features/budget/blueprint.py's /sync/wallet/* routes are the
-only callers — manual-trigger only, no scheduler job (see docs/BUDGETBAKERS_API.md).
+only callers - manual-trigger only, no scheduler job (see docs/BUDGETBAKERS_API.md).
 
-Pull order matters: accounts -> categories -> labels -> goals ->
-standing-orders -> records. Records reference accounts/categories/labels by
-remote id, so those must already have local links before records are
-pulled, or every record would be skipped as "unknown account".
+ONE-DIRECTIONAL BY DESIGN. Wallet is where expenses are tracked, so this
+app never writes back. There is no push, and client.py deliberately has no
+post/patch/delete method to write with - every request this module makes is
+a GET. (Removed 2026-08-31; `git log -- features/budget/wallet/` has the
+two-way version if it is ever wanted back.)
 
-Push is scoped narrower than pull, for reasons documented inline at each
-push function:
-  - records:            create + update (budget_transactions.updated_at
-                         makes "changed since last sync" detectable)
-  - wallets/categories/labels: create-only — those local tables have no
-                         updated_at column, so there is no reliable way to
-                         detect "edited locally since last push" for them;
-                         re-pushing every row every run would either spam
-                         Wallet with redundant PATCHes or require guessing.
-                         A local edit made after the first push simply
-                         doesn't propagate — documented, not silent.
-  - budgets/periods:     never pushed. Wallet's calendar-anchored budgets
-                         cannot express our recurring pay cycle.
-  - goals/standing-orders: never pushed — Wallet has no write endpoint for
-                         either (see the write matrix in
-                         docs/BUDGETBAKERS_API.md).
-  - transfer/adjustment transactions: never pushed. 'adjustment' is a
-                         local-only reconciliation concept. 'transfer'
-                         would need Wallet's paired-mirror-record payload
-                         shape, which wasn't confirmed against the live
-                         schema (see mapping.py's module docstring) — safer
-                         to skip than guess at a money-moving payload.
+Pull scope is narrow on purpose - accounts and records only, i.e. *money
+status*: what each account holds and what moved through it.
 
-Conflict policy: Wallet wins on pull, EXCEPT a record isn't overwritten if
-its local updated_at is newer than the link's local_synced_at (a local
-edit that hasn't been pushed yet) — see _pull_records()'s local_newer
-check. Push never touches a bank-synced account/record.
+    accounts -> budget_wallets       pulled
+    records  -> budget_transactions  pulled
+    categories / labels / goals / standing-orders   NOT pulled
+
+Wallet's categories, labels, goals and standing-orders are not pulled
+because the budget structure they created here is configured by hand in the
+app instead (a budget_categories row with a monthly_limit, budget_bills,
+budget_goals). Pulling them produced ~85 inert taxonomy categories that
+contributed nothing to the budget math, and re-created bills and goals that
+had been deliberately deleted.
+
+Records still resolve a category through the category links earlier pulls
+left behind (budget_wallet_links entity_type='category'), so a record whose
+Wallet category is already linked still arrives pre-filed. One under an
+unlinked category just gets category_id = NULL and is filed by hand.
+
+CONFLICT POLICY: Wallet wins on money. occurred_at, amount, direction,
+wallet_id and note are overwritten from Wallet on every pull. Wallet never
+wins on category_id or bill_id - those are local budget decisions (made in
+the app, e.g. "Attach an existing transaction") and a pull must not undo
+them. There is no "local edit not yet pushed" skip, because there is no
+push: money data is never frozen out of a sync.
 """
 import base64
 import datetime
@@ -49,7 +48,7 @@ from features.budget import repo
 from features.budget.errors import WalletNotConfigured
 from features.budget.periods import period_bounds
 from features.budget.wallet import mapping
-from features.budget.wallet.client import WalletClient, extract_created_id
+from features.budget.wallet.client import WalletClient
 
 ENTITY_ACCOUNT = "account"
 ENTITY_CATEGORY = "category"
@@ -210,7 +209,8 @@ def _now() -> str:
 
 
 # ================================================================
-# PULL — accounts, categories, labels, goals, standing-orders, records.
+# PULL — accounts and records only (see the module docstring for why the
+# other four entity types are not pulled).
 # Every _pull_X() takes apply=False to compute counts/skips without
 # writing anything (the /sync/wallet/preview route), and apply=True to
 # actually write (the /sync/wallet/pull route). Both paths run the exact
@@ -246,117 +246,6 @@ def _pull_accounts(client, cursor, apply=True) -> dict:
             result["created"] += 1
     if apply:
         _set_cursor(ENTITY_ACCOUNT, max_updated)
-    return result
-
-
-def _pull_categories(client, cursor, apply=True) -> dict:
-    result = {"created": 0, "updated": 0, "skipped": []}
-    params = {"updatedAt": f"gte.{cursor}"} if cursor else {}
-    max_updated = cursor
-    for category in client.paginate("/v1/api/categories", **params):
-        remote_id = category["id"]
-        updated_at = category.get("updatedAt")
-        if updated_at and (not max_updated or updated_at > max_updated):
-            max_updated = updated_at
-        if mapping.is_restricted_category(remote_id):
-            result["skipped"].append({"remoteId": remote_id, "name": category.get("name"), "reason": "system category"})
-            continue
-
-        fields = mapping.category_to_local_fields(category)
-        link = repo.get_link_by_remote(ENTITY_CATEGORY, remote_id)
-        if link:
-            if apply:
-                repo.update_category(link["local_id"], **fields)
-                repo.upsert_link(ENTITY_CATEGORY, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
-            result["updated"] += 1
-        else:
-            if apply:
-                local_category = repo.create_category(fields["name"], fields["kind"])
-                if fields["archived"]:
-                    repo.update_category(local_category["id"], archived=True)
-                repo.upsert_link(ENTITY_CATEGORY, local_category["id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
-            result["created"] += 1
-    if apply:
-        _set_cursor(ENTITY_CATEGORY, max_updated)
-    return result
-
-
-def _pull_labels(client, apply=True) -> dict:
-    """No cursor — the /labels list params weren't confirmed to support
-    updatedAt filtering, and label counts are small enough that a full
-    fetch every run is cheap (unlike records)."""
-    result = {"created": 0, "updated": 0, "skipped": []}
-    for label in client.paginate("/v1/api/labels"):
-        remote_id = label["id"]
-        fields = mapping.label_to_local_fields(label)
-        link = repo.get_link_by_remote(ENTITY_LABEL, remote_id)
-        if link:
-            if apply:
-                repo.update_label(link["local_id"], **fields)
-                repo.upsert_link(ENTITY_LABEL, link["local_id"], remote_id, remote_updated_at=label.get("updatedAt"), local_synced_at=_now(), last_direction="pull")
-            result["updated"] += 1
-        else:
-            if apply:
-                local_label = repo.create_label(fields["name"], color=fields["color"])
-                if fields["archived"]:
-                    repo.update_label(local_label["id"], archived=True)
-                repo.upsert_link(ENTITY_LABEL, local_label["id"], remote_id, remote_updated_at=label.get("updatedAt"), local_synced_at=_now(), last_direction="pull")
-            result["created"] += 1
-    return result
-
-
-def _pull_goals(client, cursor, apply=True) -> dict:
-    result = {"created": 0, "updated": 0, "skipped": []}
-    params = {"updatedAt": f"gte.{cursor}"} if cursor else {}
-    max_updated = cursor
-    for goal in client.paginate("/v1/api/goals", **params):
-        remote_id = goal["id"]
-        updated_at = goal.get("updatedAt")
-        if updated_at and (not max_updated or updated_at > max_updated):
-            max_updated = updated_at
-        fields = mapping.goal_to_local_fields(goal)
-        link = repo.get_link_by_remote(ENTITY_GOAL, remote_id)
-        if link:
-            if apply:
-                repo.update_goal(link["local_id"], **fields)
-                repo.upsert_link(ENTITY_GOAL, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
-            result["updated"] += 1
-        else:
-            if apply:
-                local_goal = repo.create_goal(fields["name"], fields["target_amount"], target_date=fields["target_date"], reserve_from_free=False)
-                if fields["archived"]:
-                    repo.update_goal(local_goal["id"], archived=True)
-                repo.upsert_link(ENTITY_GOAL, local_goal["id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
-            result["created"] += 1
-    if apply:
-        _set_cursor(ENTITY_GOAL, max_updated)
-    return result
-
-
-def _pull_standing_orders(client, apply=True) -> dict:
-    """No cursor — GET /standing-orders' filter params weren't confirmed;
-    full fetch every run (standing orders are low-cardinality, unlike
-    records)."""
-    result = {"created": 0, "updated": 0, "skipped": []}
-    for order in client.paginate("/v1/api/standing-orders"):
-        remote_id = order["id"]
-        fields = mapping.standing_order_to_bill_fields(order)
-        category_remote_id = mapping.standing_order_category_id(order)
-        category_link = repo.get_link_by_remote(ENTITY_CATEGORY, category_remote_id) if category_remote_id else None
-        link = repo.get_link_by_remote(ENTITY_STANDING_ORDER, remote_id)
-        if link:
-            if apply:
-                repo.update_bill(link["local_id"], **fields)
-                repo.upsert_link(ENTITY_STANDING_ORDER, link["local_id"], remote_id, remote_updated_at=None, local_synced_at=_now(), last_direction="pull")
-            result["updated"] += 1
-        else:
-            if apply:
-                bill = repo.create_bill(
-                    fields["name"], fields["amount"], due_day=fields["due_day"], cadence=fields["cadence"],
-                    category_id=category_link["local_id"] if category_link else None,
-                )
-                repo.upsert_link(ENTITY_STANDING_ORDER, bill["id"], remote_id, remote_updated_at=None, local_synced_at=_now(), last_direction="pull")
-            result["created"] += 1
     return result
 
 
@@ -427,36 +316,21 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                 result["skipped"].append({"remoteId": remote_id, "reason": str(e)})
                 continue
 
-            label_ids = [
-                l["local_id"] for l in (
-                    repo.get_link_by_remote(ENTITY_LABEL, rlid, conn=conn) for rlid in mapping.record_label_ids(record)
-                ) if l
-            ]
-
             link = repo.get_link_by_remote(ENTITY_RECORD, remote_id, conn=conn)
             if link:
-                existing = repo.get_transaction(link["local_id"], conn=conn)
-                local_synced_at = link.get("local_synced_at")
-                local_edited_since_sync = (
-                    existing and existing.get("updated_at") and local_synced_at
-                    and existing["updated_at"] > local_synced_at
-                )
-                if local_edited_since_sync:
-                    result["skipped"].append({"remoteId": remote_id, "reason": "local edit not yet pushed — pull skipped to avoid overwriting it"})
-                    continue
                 if apply:
+                    # Wallet wins on money — but category_id and bill_id are
+                    # deliberately absent from this call. Those are local
+                    # budget decisions (filed by hand, or via "Attach an
+                    # existing transaction"), and since categories are no
+                    # longer pulled, re-sending the resolved value would
+                    # blank them on every single sync.
                     repo.update_transaction(
                         link["local_id"], conn=conn,
                         occurred_at=fields["occurred_at"], amount=fields["amount"],
-                        direction=fields["direction"], category_id=fields["category_id"], wallet_id=fields["wallet_id"],
+                        direction=fields["direction"], wallet_id=fields["wallet_id"],
                         note=fields["note"],
                     )
-                    repo.set_transaction_labels(link["local_id"], label_ids, conn=conn)
-                    # local_synced_at captured AFTER update_transaction() (which
-                    # always stamps its own updated_at) — must be >= that
-                    # stamp, or this row would look "locally edited" and get
-                    # selected for push next run, ping-ponging the same pulled
-                    # data straight back to Wallet.
                     repo.upsert_link(ENTITY_RECORD, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull", conn=conn)
                 result["updated"] += 1
             else:
@@ -467,8 +341,6 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                         wallet_id=fields["wallet_id"], period_id=period_id, note=fields["note"],
                         source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"], conn=conn,
                     )
-                    if label_ids:
-                        repo.set_transaction_labels(txn_id, label_ids, conn=conn)
                     repo.upsert_link(ENTITY_RECORD, txn_id, remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull", conn=conn)
                 result["created"] += 1
 
@@ -495,8 +367,8 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
 
 
 def pull_all(apply=True, max_seconds=None) -> dict:
-    """Runs every entity pull in dependency order. Returns per-entity
-    summaries; raises (rather than partially swallowing) on the first
+    """Pulls accounts then records. Returns per-entity summaries;
+    raises (rather than partially swallowing) on the first
     hard failure — features/budget/errors.py's WalletError subclasses all
     map to the standard envelope, so the blueprint route surfaces exactly
     what failed. Whatever ran before the failure already committed its
@@ -515,25 +387,19 @@ def pull_all(apply=True, max_seconds=None) -> dict:
     cursors = _get_cursors()
     deadline = (time.monotonic() + max_seconds) if max_seconds else None
 
-    # Mid-backfill resume: accounts/categories/labels/goals/standing-orders
-    # were all drained on the first call (their cursors are set), and
-    # re-walking them every /pull round adds tens of seconds against a
-    # far-region DB for near-zero new rows. Skip straight to records until
-    # the history is in; the next full sync picks up anything added since.
+    # Mid-backfill resume: accounts were drained on the first call (the
+    # cursor is set), and re-walking them every /pull round adds seconds
+    # against a far-region DB for near-zero new rows. Skip straight to
+    # records until the history is in; the next sync picks up anything
+    # added since.
     resuming_backfill = apply and _get_record_progress()[0] > 0
 
     conn = db_conn()
     try:
-        if resuming_backfill:
-            summary = {k: _empty_pull_result() for k in ("accounts", "categories", "labels", "goals", "bills")}
-        else:
-            summary = {
-                "accounts": _pull_accounts(client, cursors.get(ENTITY_ACCOUNT), apply=apply),
-                "categories": _pull_categories(client, cursors.get(ENTITY_CATEGORY), apply=apply),
-                "labels": _pull_labels(client, apply=apply),
-                "goals": _pull_goals(client, cursors.get(ENTITY_GOAL), apply=apply),
-                "bills": _pull_standing_orders(client, apply=apply),
-            }
+        summary = {
+            "accounts": _empty_pull_result() if resuming_backfill
+            else _pull_accounts(client, cursors.get(ENTITY_ACCOUNT), apply=apply),
+        }
         summary["records"] = _pull_records(
             client, cursors.get(ENTITY_RECORD), get_payroll_day(), conn, apply=apply, deadline=deadline
         )
@@ -544,159 +410,14 @@ def pull_all(apply=True, max_seconds=None) -> dict:
     return summary
 
 
-# ================================================================
-# PUSH — records (create+update+delete), wallets/categories/labels
-# (create-only). See this module's docstring for the full scoping
-# rationale.
-# ================================================================
-def _push_records(client, apply=True) -> dict:
-    result = {"created": 0, "updated": 0, "deleted": 0, "skipped": [], "errors": []}
-
-    # New/edited: no link row, or local updated_at newer than the link's
-    # last sync point.
-    for txn in repo.get_active_transactions():
-        link = repo.get_link_by_local(ENTITY_RECORD, txn["id"])
-        if link and (not txn.get("updated_at") or not link.get("local_synced_at") or txn["updated_at"] <= link["local_synced_at"]):
-            continue  # unchanged since last sync — the normal steady-state case, not worth reporting
-
-        if txn["direction"] in ("transfer", "adjustment"):
-            # Reported (not silently dropped) only because it reached
-            # here — i.e. it's new or changed and would otherwise have
-            # been pushed. See this module's docstring for why these two
-            # directions never push. Never gets a link row, so it's
-            # re-reported every run until the set of unpushed
-            # transfers/adjustments stops growing.
-            result["skipped"].append({"localId": txn["id"], "reason": f"direction={txn['direction']} is not pushed to Wallet"})
-            continue
-
-        wallet_link = repo.get_link_by_local(ENTITY_ACCOUNT, txn["wallet_id"]) if txn["wallet_id"] else None
-        if wallet_link is None:
-            result["skipped"].append({"localId": txn["id"], "reason": "wallet not linked to a Wallet account yet — push accounts first"})
-            continue
-        category_link = repo.get_link_by_local(ENTITY_CATEGORY, txn["category_id"]) if txn["category_id"] else None
-        label_links = [repo.get_link_by_local(ENTITY_LABEL, lid) for lid in repo.get_transaction_label_ids(txn["id"])]
-        label_remote_ids = [l["remote_id"] for l in label_links if l]
-
-        try:
-            if link:
-                patch = mapping.transaction_to_record_patch(txn, category_id=category_link["remote_id"] if category_link else None, label_ids=label_remote_ids)
-                if apply and patch:
-                    client.patch("/v1/api/records", [{"id": link["remote_id"], **patch}])
-                if apply:
-                    repo.upsert_link(ENTITY_RECORD, txn["id"], link["remote_id"], remote_updated_at=link.get("remote_updated_at"), local_synced_at=_now(), last_direction="push")
-                result["updated"] += 1
-            else:
-                payload = mapping.transaction_to_record_payload(
-                    txn, account_id=wallet_link["remote_id"],
-                    category_id=category_link["remote_id"] if category_link else None,
-                    label_ids=label_remote_ids,
-                )
-                if apply:
-                    body = client.post("/v1/api/records", [payload])
-                    remote_id = extract_created_id(body)
-                    if remote_id:
-                        repo.upsert_link(ENTITY_RECORD, txn["id"], remote_id, remote_updated_at=None, local_synced_at=_now(), last_direction="push")
-                    else:
-                        result["errors"].append({"localId": txn["id"], "reason": f"could not read created record id from response: {body}"})
-                        continue
-                result["created"] += 1
-        except Exception as e:
-            result["errors"].append({"localId": txn["id"], "reason": str(e)})
-
-    # Soft-deleted locally, still linked -> delete remotely.
-    delete_remote_ids = []
-    for local_id in repo.get_deleted_transaction_ids():
-        link = repo.get_link_by_local(ENTITY_RECORD, local_id)
-        if link:
-            delete_remote_ids.append((local_id, link["remote_id"]))
-    for i in range(0, len(delete_remote_ids), 10):
-        batch = delete_remote_ids[i:i + 10]
-        try:
-            if apply:
-                client.delete_batch("records", [remote_id for _, remote_id in batch])
-                for local_id, _ in batch:
-                    repo.delete_link(ENTITY_RECORD, local_id)
-            result["deleted"] += len(batch)
-        except Exception as e:
-            result["errors"].append({"reason": str(e), "localIds": [local_id for local_id, _ in batch]})
-
-    return result
-
-
-def _push_new_wallets(client, apply=True) -> dict:
-    result = {"created": 0, "skipped": []}
-    for wallet in repo.get_wallets(include_archived=True):
-        if repo.get_link_by_local(ENTITY_ACCOUNT, wallet["id"]):
-            continue
-        payload = mapping.wallet_to_account_payload(wallet)
-        try:
-            if apply:
-                body = client.post("/v1/api/accounts", payload)
-                remote_id = extract_created_id(body)
-                if remote_id:
-                    repo.upsert_link(ENTITY_ACCOUNT, wallet["id"], remote_id, remote_updated_at=None, local_synced_at=_now(), last_direction="push")
-                else:
-                    result["skipped"].append({"localId": wallet["id"], "reason": f"could not read created account id: {body}"})
-                    continue
-            result["created"] += 1
-        except Exception as e:
-            result["skipped"].append({"localId": wallet["id"], "reason": str(e)})
-    return result
-
-
-def _push_new_categories(client, apply=True) -> dict:
-    """Custom categories need a system parentId (docs/BUDGETBAKERS_API.md) —
-    there's no local field to derive one from, so this defaults every
-    pushed category to Wallet's 'Uncategorized' parent isn't allowed
-    (it's restricted) and no other safe default exists. Left as a
-    documented gap: local-only categories aren't pushed until a parent-
-    category mapping is added."""
-    return {"created": 0, "skipped": [{"reason": "pushing new categories needs a parentId mapping not yet implemented — see _push_new_categories docstring"}]}
-
-
-def _push_new_labels(client, apply=True) -> dict:
-    result = {"created": 0, "skipped": []}
-    for label in repo.get_labels(include_archived=True):
-        if repo.get_link_by_local(ENTITY_LABEL, label["id"]):
-            continue
-        payload = mapping.local_label_to_payload(label)
-        try:
-            if apply:
-                body = client.post("/v1/api/labels", payload)
-                remote_id = extract_created_id(body)
-                if remote_id:
-                    repo.upsert_link(ENTITY_LABEL, label["id"], remote_id, remote_updated_at=None, local_synced_at=_now(), last_direction="push")
-                else:
-                    result["skipped"].append({"localId": label["id"], "reason": f"could not read created label id: {body}"})
-                    continue
-            result["created"] += 1
-        except Exception as e:
-            result["skipped"].append({"localId": label["id"], "reason": str(e)})
-    return result
-
-
-def push_all(apply=True) -> dict:
-    client = WalletClient()
-    if not client.configured():
-        raise WalletNotConfigured("WALLET_API_TOKEN is not set.")
-    summary = {
-        "wallets": _push_new_wallets(client, apply=apply),
-        "categories": _push_new_categories(client, apply=apply),
-        "labels": _push_new_labels(client, apply=apply),
-        "records": _push_records(client, apply=apply),
-    }
-    if apply:
-        _record_run({"direction": "push", "counts": {
-            k: {kk: vv for kk, vv in v.items() if kk not in ("skipped", "errors")} for k, v in summary.items()
-        }})
-    return summary
-
-
 def preview() -> dict:
-    """Dry run of both directions — identical resolve/skip logic to a real
-    run, nothing written. Always call this before push_all(apply=True)
-    against real financial data."""
-    return {"pull": pull_all(apply=False), "push": push_all(apply=False)}
+    """Dry run of the pull — identical resolve/skip logic to a real run,
+    nothing written. Always call this before pull_all(apply=True) against
+    real financial data. There is no push half: this app never writes to
+    Wallet (see the module docstring)."""
+    return {"pull": pull_all(apply=False)}
+
+
 
 
 # ================================================================

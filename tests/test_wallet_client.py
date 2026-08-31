@@ -5,7 +5,7 @@ import pytest
 from features.budget.errors import (
     WalletInitSyncInProgress, WalletNotConfigured, WalletRateLimited, WalletTokenExpired,
 )
-from features.budget.wallet.client import WalletClient, extract_created_id, extract_items, extract_next_offset
+from features.budget.wallet.client import WalletClient, extract_items, extract_next_offset
 
 
 class FakeResponse:
@@ -27,8 +27,9 @@ class FakeSession:
         self.responses = list(responses)
         self.calls = []
 
-    def request(self, method, url, headers=None, params=None, json=None, timeout=None):
-        self.calls.append({"method": method, "url": url, "params": params, "json": json})
+    # get() only — WalletClient has no write method to exercise.
+    def get(self, url, headers=None, params=None, timeout=None):
+        self.calls.append({"method": "GET", "url": url, "params": params})
         return self.responses.pop(0)
 
 
@@ -83,13 +84,6 @@ def test_reserve_threshold_blocks_before_making_the_call():
     with pytest.raises(WalletRateLimited):
         client.get("/v1/api/accounts")
     assert session.calls == []  # never actually sent
-
-
-def test_207_partial_success_returns_body_without_raising():
-    body = {"summary": {"total": 2, "succeeded": 1, "clientErrors": 1}, "results": [{"success": True}, {"success": False}]}
-    client, _ = make_client([FakeResponse(207, body)])
-    result = client.post("/v1/api/records", [{}, {}])
-    assert result["summary"]["succeeded"] == 1
 
 
 def test_paginate_follows_next_offset():
@@ -150,23 +144,3 @@ def test_extract_next_offset_handles_top_level_and_nested_meta():
     assert extract_next_offset([1, 2, 3]) is None
 
 
-def test_extract_created_id_from_207_results():
-    body = {"results": [{"success": True, "data": {"id": "new-id"}}]}
-    assert extract_created_id(body) == "new-id"
-
-
-def test_extract_created_id_from_bare_object():
-    assert extract_created_id({"id": "new-id"}) == "new-id"
-
-
-def test_extract_created_id_from_data_wrapper():
-    assert extract_created_id({"data": {"id": "new-id"}}) == "new-id"
-
-
-def test_extract_created_id_from_list():
-    assert extract_created_id([{"id": "new-id"}]) == "new-id"
-
-
-def test_extract_created_id_returns_none_when_unrecognizable():
-    assert extract_created_id({"unrelated": True}) is None
-    assert extract_created_id(None) is None

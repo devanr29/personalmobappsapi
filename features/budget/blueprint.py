@@ -504,7 +504,9 @@ def alert_prefs_edit():
 
 
 # ================================================================
-# WALLET SYNC — two-way sync against Wallet by BudgetBakers' REST API.
+# WALLET SYNC — one-directional pull from Wallet by BudgetBakers' REST API.
+# Nothing is ever sent out: there is no push route, and the HTTP client has
+# no write method (see features/budget/wallet/client.py).
 # Manual-trigger only, no scheduler job — see features/budget/wallet/ and
 # docs/BUDGETBAKERS_API.md. sync.py's dicts are already camelCase-keyed,
 # so routes return them straight through ok() without a serializer.
@@ -516,8 +518,8 @@ def wallet_sync_status():
 
 @budget_bp.route("/sync/wallet/preview", methods=["POST"])
 def wallet_sync_preview():
-    """Dry run of both directions — nothing written. Always call this
-    before /pull or /push against real financial data."""
+    """Dry run of the pull — nothing written. Always call this before
+    /pull against real financial data."""
     return ok(wallet_sync.preview())
 
 
@@ -535,21 +537,14 @@ def wallet_sync_pull():
     return ok({"pull": pull, "summary": service.get_summary()})
 
 
-@budget_bp.route("/sync/wallet/push", methods=["POST"])
-def wallet_sync_push():
-    return ok({"push": wallet_sync.push_all(apply=True)})
-
-
+# Kept as an alias of /pull so the mobile "Sync" button (and any build
+# still calling the old pull-then-push endpoint) keeps working — it now
+# only pulls. POST /sync/wallet/push is gone entirely; an old client
+# hitting it gets a 404, which is the correct answer now.
 @budget_bp.route("/sync/wallet", methods=["POST"])
 def wallet_sync_run():
-    pull_result = wallet_sync.pull_all(apply=True, max_seconds=_SYNC_PULL_BUDGET_SECONDS)
-    # While the historical backfill is still paging in, there is nothing
-    # local to push yet — skip the (DB-heavy) push enumeration until the
-    # pull side has fully caught up.
-    push_result = None
-    if not pull_result["records"].get("hasMore"):
-        push_result = wallet_sync.push_all(apply=True)
-    return ok({"pull": pull_result, "push": push_result, "summary": service.get_summary()})
+    pull = wallet_sync.pull_all(apply=True, max_seconds=_SYNC_PULL_BUDGET_SECONDS)
+    return ok({"pull": pull, "summary": service.get_summary()})
 
 
 @budget_bp.route("/sync/wallet/compare", methods=["GET"])
