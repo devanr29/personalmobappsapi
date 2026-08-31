@@ -255,17 +255,46 @@ MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3()]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 
+def _budget_tables_present(conn) -> bool:
+    """Whether the ledger tables actually exist, checked independently of
+    the bot_state version marker.
+
+    The marker can run ahead of reality: copying bot_state into a fresh
+    Postgres (scripts/migrate_sqlite_to_pg.py, or any restore) carries
+    budget_schema_version with it, and the app then boots, sees "version N,
+    nothing to do", and never runs the CREATE TABLE step — every budget
+    request 500s with UndefinedTable. Probe for a canonical table rather
+    than trusting the marker alone."""
+    if IS_PG:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = 'budget_wallets'"
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'budget_wallets'"
+        ).fetchone()
+    return row is not None
+
+
 def init_budget_schema():
     current = int(state_get("budget_schema_version") or 0)
-    if current >= BUDGET_SCHEMA_VERSION:
-        return
     conn = db_conn()
-    for step in MIGRATIONS[current:]:
-        for statement in step:
-            if callable(statement):
-                statement(conn)
-            else:
-                conn.execute(statement)
-    conn.commit()
-    conn.close()
+    try:
+        present = _budget_tables_present(conn)
+        if current >= BUDGET_SCHEMA_VERSION and present:
+            return
+        # Marker says "up to date" but the tables are gone -> replay from 0.
+        # Every statement is idempotent (CREATE TABLE IF NOT EXISTS /
+        # _add_column_if_missing), so a full replay is safe.
+        start = current if present else 0
+        for step in MIGRATIONS[start:]:
+            for statement in step:
+                if callable(statement):
+                    statement(conn)
+                else:
+                    conn.execute(statement)
+        conn.commit()
+    finally:
+        conn.close()
     state_set("budget_schema_version", str(BUDGET_SCHEMA_VERSION))

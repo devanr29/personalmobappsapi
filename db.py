@@ -53,6 +53,7 @@ class _PGConn:
 
     def __init__(self, conn):
         self._conn = conn
+        self._returned = False
 
     def execute(self, sql, params=()):
         cur = self._conn.cursor()
@@ -79,6 +80,9 @@ class _PGConn:
         the connection isn't idle. If the connection itself is broken,
         drop it from the pool entirely rather than recycling a dead
         socket."""
+        if self._returned:
+            return
+        self._returned = True
         try:
             if self._conn.closed:
                 _pg_pool.putconn(self._conn, close=True)
@@ -88,6 +92,21 @@ class _PGConn:
             _pg_pool.putconn(self._conn)
         except Exception:
             _pg_pool.putconn(self._conn, close=True)
+
+    def __del__(self):
+        # Safety net for the leak that production pool exhaustion traced back
+        # to: most repo.py reads do `conn = db_conn()` ... `conn.close()`
+        # with no try/finally, so any exception in between (a missing table,
+        # a vendor API shape change, a network blip) skips the close and
+        # leaks the connection out of ThreadedConnectionPool(1, 10). ~10 of
+        # those and every db_conn() call raises "connection pool exhausted"
+        # — the whole API is down until a redeploy. GC reclaim is the
+        # fallback; the explicit close() above is still the intended path.
+        if not self._returned and _pg_pool is not None:
+            try:
+                self.close()
+            except Exception:
+                pass
 
 
 def _pg_lastrowid(cur, sql):
