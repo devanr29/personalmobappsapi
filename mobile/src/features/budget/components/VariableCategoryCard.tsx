@@ -1,4 +1,4 @@
-import { CheckCircle, CircleIcon, PencilSimple } from "phosphor-react-native";
+import { CheckCircle, CircleIcon, Paperclip, PencilSimple } from "phosphor-react-native";
 import { ActivityIndicator } from "react-native";
 
 import { ExpandableCard } from "@/components/ExpandableCard";
@@ -16,7 +16,11 @@ export type VariableCategoryCardProps = {
   wallets: Wallet[];
   payPending: boolean;
   onEdit: () => void;
-  onLogSpend: (amount: number, walletId: number | null, logOnly: boolean) => Promise<void>;
+  onLogSpend: (amount: number, walletId: number) => Promise<void>;
+  /** Opens the picker for re-filing an expense that already exists in the
+   * ledger under this category (money spent but never attributed to the
+   * budget), instead of logging a fresh one. */
+  onAttachTransaction: () => void;
   onTogglePaid: () => void;
   onPayAmount: (amount: number, walletId: number, createTransaction: boolean) => Promise<void>;
 };
@@ -38,7 +42,7 @@ export type VariableCategoryCardProps = {
  * "Pay a different amount" row's "Record as transaction" switch is where
  * that choice is made explicit for a custom amount; the one-tap toggle
  * button always records one (server default). */
-export function VariableCategoryCard({ item, category, wallets, payPending, onEdit, onLogSpend, onTogglePaid, onPayAmount }: VariableCategoryCardProps) {
+export function VariableCategoryCard({ item, category, wallets, payPending, onEdit, onLogSpend, onAttachTransaction, onTogglePaid, onPayAmount }: VariableCategoryCardProps) {
   const theme = useTheme();
   const limit = category?.monthlyLimit ?? item.remaining + item.spent - item.overBudget;
   const progress = limit > 0 ? clamp01(item.spent / limit) : 0;
@@ -91,16 +95,27 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
                 submitLabel="Pay"
                 wallets={wallets}
                 showTransactionToggle
-                onSubmit={(amount, walletId, createTransaction) => onPayAmount(amount, walletId as number, createTransaction)}
+                onSubmit={(amount, walletId, createTransaction) => onPayAmount(amount, walletId, createTransaction)}
               />
             ) : null}
             <SpendInputRow
               label="Log spend"
               submitLabel="Log"
               wallets={wallets}
-              logOnlyToggle
-              onSubmit={(amount, walletId, logOnly) => onLogSpend(amount, walletId, logOnly)}
+              onSubmit={(amount, walletId) => onLogSpend(amount, walletId)}
             />
+            <PressableScale
+              onPress={onAttachTransaction}
+              accessibilityRole="button"
+              accessibilityLabel={`Attach an existing transaction to ${item.name}`}
+            >
+              <HStack align="center" gap={1.5}>
+                <Paperclip size={14} color={theme.colors.accent} />
+                <Text variant="caption" tone="accent">
+                  Attach an existing transaction
+                </Text>
+              </HStack>
+            </PressableScale>
           </>
         ) : null}
         <PressableScale onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${item.name}`}>

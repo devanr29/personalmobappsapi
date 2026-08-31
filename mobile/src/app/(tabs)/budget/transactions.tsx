@@ -246,9 +246,7 @@ function TransactionRow({ txn }: { txn: Transaction }) {
       <Stack flex={1} gap={0.5}>
         <Text variant="body">{txn.note || txn.categoryName || "Transaction"}</Text>
         <Text variant="caption" tone="faint">
-          {[txn.categoryName, txn.source === "log_only" ? "budget only" : txn.walletName, formatBudgetTime(txn.occurredAt)]
-            .filter(Boolean)
-            .join(" · ")}
+          {[txn.categoryName, txn.walletName, formatBudgetTime(txn.occurredAt)].filter(Boolean).join(" · ")}
         </Text>
       </Stack>
       <Text

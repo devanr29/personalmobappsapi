@@ -84,54 +84,6 @@ def test_create_transaction_reduces_category_remaining_in_breakdown(client, auth
     repo.soft_delete_transaction(txn_id)
 
 
-def test_log_only_expense_hits_the_envelope_but_not_the_wallet(client, auth_headers, wallet_and_category):
-    # "Log spend" with logOnly on: the money already left the wallet via a
-    # transaction that was never attributed to this budget, so recording it
-    # must move the category's `spent` without a second balance deduction.
-    wallet, category = wallet_and_category
-    balance_before = repo.wallet_balance(wallet["id"])
-
-    resp = client.post(
-        "/api/budget/transactions",
-        headers=auth_headers,
-        json={"amount": 40_000, "direction": "expense", "categoryId": category["id"], "logOnly": True},
-    )
-    assert resp.status_code == 201
-    txn = resp.get_json()["data"]["transaction"]
-    assert txn["walletId"] is None
-    assert txn["walletName"] is None
-    assert txn["source"] == "log_only"
-
-    breakdown = client.get("/api/budget/breakdown", headers=auth_headers).get_json()["data"]
-    line = next(v for v in breakdown["remainingVar"] if v["categoryId"] == category["id"])
-    assert line["spent"] == 40_000
-    assert line["remaining"] == 30_000  # 70_000 limit - 40_000
-
-    # The wallet balance is untouched — that's the whole point: the real
-    # transaction elsewhere already accounts for the outflow.
-    assert repo.wallet_balance(wallet["id"]) == balance_before
-
-    repo.soft_delete_transaction(txn["id"])
-
-
-def test_log_only_rejects_income_and_missing_category(client, auth_headers, wallet_and_category):
-    _, category = wallet_and_category
-
-    resp = client.post(
-        "/api/budget/transactions",
-        headers=auth_headers,
-        json={"amount": 10_000, "direction": "income", "categoryId": category["id"], "logOnly": True},
-    )
-    assert resp.status_code == 400
-
-    resp = client.post(
-        "/api/budget/transactions",
-        headers=auth_headers,
-        json={"amount": 10_000, "direction": "expense", "logOnly": True},
-    )
-    assert resp.status_code == 400
-
-
 def test_create_transaction_rejects_unknown_category(client, auth_headers, wallet_and_category):
     wallet, _ = wallet_and_category
     resp = client.post(

@@ -195,11 +195,6 @@ export type CreateTransactionInput = {
   walletId?: number | null;
   note?: string | null;
   occurredAt?: string | null;
-  /** "Log spend" against a variable budget for money that already left the
-   * wallet via a transaction that was never attributed to the budget. The
-   * server records it against the category with no wallet, so the envelope
-   * updates without a second balance deduction. */
-  logOnly?: boolean;
 };
 
 export function createTransaction(input: CreateTransactionInput) {

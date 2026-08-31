@@ -223,18 +223,6 @@ def create_transaction(
         raise BudgetValidationError("amount must be a non-zero number.")
     if direction not in _SIGNED_DIRECTIONS and amount < 0:
         raise BudgetValidationError(f"amount must be positive for direction={direction}.")
-    if source == "log_only":
-        # "Log spend" against a variable budget for money that already left
-        # the wallet via a transaction that exists but was never attributed
-        # to the budget. It must count toward the category envelope
-        # (spend_by_category, which filters on direction/period only) without
-        # a second wallet deduction — so it carries a category, no wallet.
-        if direction != "expense":
-            raise BudgetValidationError("logOnly spend must be an expense.")
-        if category_id is None:
-            raise BudgetValidationError("logOnly spend needs a category.")
-        wallet_id = None
-        transfer_wallet_id = None
     _validate_refs(category_id, wallet_id, transfer_wallet_id)
 
     period = ensure_current_period(get_payroll_day())

@@ -78,7 +78,7 @@ export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onE
             label="Pay a different amount"
             submitLabel="Pay"
             wallets={wallets}
-            onSubmit={(amount, walletId) => onPayAmount(amount, walletId as number)}
+            onSubmit={(amount, walletId) => onPayAmount(amount, walletId)}
           />
         ) : null}
         <PressableScale onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${bill.name}`}>

@@ -391,23 +391,3 @@ def test_push_records_skips_when_wallet_not_yet_linked():
     finally:
         _cleanup_transaction(txn["id"])
         _cleanup_wallet(wallet["id"])
-
-
-def test_push_records_never_pushes_a_log_only_entry():
-    # A "Log spend" entry stands in for a record that already exists in
-    # Wallet — pushing it would duplicate that record there.
-    category = repo.create_category("_TestWalletSyncLogOnlyCat", "variable", monthly_limit=100_000)
-    txn = repo.create_transaction(
-        amount=8000, direction="expense", category_id=category["id"],
-        occurred_at="2026-08-01 10:00", source="log_only",
-    )
-    client = FakeClient(post_response={"id": "should-not-be-used"})
-    try:
-        result = sync._push_records(client, apply=True)
-        assert result["created"] == 0
-        assert client.post_calls == []
-        assert all(s["localId"] != txn["id"] for s in result["skipped"])
-        assert repo.get_link_by_local(sync.ENTITY_RECORD, txn["id"]) is None
-    finally:
-        _cleanup_transaction(txn["id"])
-        _cleanup_category(category["id"])

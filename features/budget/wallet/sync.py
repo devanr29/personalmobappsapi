@@ -559,12 +559,6 @@ def _push_records(client, apply=True) -> dict:
         if link and (not txn.get("updated_at") or not link.get("local_synced_at") or txn["updated_at"] <= link["local_synced_at"]):
             continue  # unchanged since last sync — the normal steady-state case, not worth reporting
 
-        if txn.get("source") == "log_only":
-            # A local "Log spend" entry standing in for a record that already
-            # exists in Wallet (the user just hadn't attributed it to the
-            # budget). Pushing it would create a duplicate record there.
-            continue
-
         if txn["direction"] in ("transfer", "adjustment"):
             # Reported (not silently dropped) only because it reached
             # here — i.e. it's new or changed and would otherwise have

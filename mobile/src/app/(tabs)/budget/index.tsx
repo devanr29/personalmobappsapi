@@ -15,6 +15,7 @@ import { useBudgetRevision } from "@/features/budget/BudgetProvider";
 import {
   createTransaction, getBreakdown, listBills, listCategories, payBill, payCategory, snapshotFromBreakdown, unpayBill, unpayCategory,
 } from "@/features/budget/api";
+import { AttachTransactionSheet } from "@/features/budget/components/AttachTransactionSheet";
 import { BudgetItemSheet } from "@/features/budget/components/BudgetItemSheet";
 import { FixedBudgetCard } from "@/features/budget/components/FixedBudgetCard";
 import { TransactionSheet } from "@/features/budget/components/TransactionSheet";
@@ -64,6 +65,7 @@ export default function BudgetOverviewScreen() {
   const [budgetSheet, setBudgetSheet] = useState<{ itemKind: "category" | "bill"; editing: Category | Bill | null } | null>(null);
   const [payPendingBillId, setPayPendingBillId] = useState<number | null>(null);
   const [payPendingCategoryId, setPayPendingCategoryId] = useState<number | null>(null);
+  const [attachTarget, setAttachTarget] = useState<{ id: number; name: string } | null>(null);
 
   const fetcher = useCallback(async (): Promise<OverviewResource> => {
     const [breakdown, bills, categories] = await Promise.all([getBreakdown(), listBills(), listCategories("variable")]);
@@ -93,8 +95,8 @@ export default function BudgetOverviewScreen() {
     }
   };
 
-  const handleLogSpend = async (categoryId: number, amount: number, walletId: number | null, logOnly: boolean) => {
-    await createTransaction({ amount, direction: "expense", categoryId, walletId: logOnly ? null : walletId, logOnly });
+  const handleLogSpend = async (categoryId: number, amount: number, walletId: number) => {
+    await createTransaction({ amount, direction: "expense", categoryId, walletId });
     handleSaved();
   };
 
@@ -278,7 +280,8 @@ export default function BudgetOverviewScreen() {
                           const category = item.categoryId != null ? categoryById.get(item.categoryId) : undefined;
                           if (category) setBudgetSheet({ itemKind: "category", editing: category });
                         }}
-                        onLogSpend={(amount, walletId, logOnly) => handleLogSpend(item.categoryId as number, amount, walletId, logOnly)}
+                        onLogSpend={(amount, walletId) => handleLogSpend(item.categoryId as number, amount, walletId)}
+                        onAttachTransaction={() => setAttachTarget({ id: item.categoryId as number, name: item.name })}
                         onTogglePaid={() => handleToggleCategoryPaid(item.categoryId as number, item.paid)}
                         onPayAmount={(amount, walletId, createTransactionFlag) =>
                           handlePayCategoryAmount(item.categoryId as number, amount, walletId, createTransactionFlag)
@@ -301,6 +304,13 @@ export default function BudgetOverviewScreen() {
         onSaved={handleSaved}
         itemKind={budgetSheet?.itemKind ?? "category"}
         editing={budgetSheet?.editing}
+      />
+      <AttachTransactionSheet
+        visible={attachTarget !== null}
+        onClose={() => setAttachTarget(null)}
+        onAttached={handleSaved}
+        categoryId={attachTarget?.id ?? 0}
+        categoryName={attachTarget?.name ?? ""}
       />
     </SafeAreaView>
   );
