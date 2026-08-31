@@ -16,7 +16,7 @@ export type VariableCategoryCardProps = {
   wallets: Wallet[];
   payPending: boolean;
   onEdit: () => void;
-  onLogSpend: (amount: number, walletId: number) => Promise<void>;
+  onLogSpend: (amount: number, walletId: number | null, logOnly: boolean) => Promise<void>;
   onTogglePaid: () => void;
   onPayAmount: (amount: number, walletId: number, createTransaction: boolean) => Promise<void>;
 };
@@ -91,14 +91,15 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
                 submitLabel="Pay"
                 wallets={wallets}
                 showTransactionToggle
-                onSubmit={(amount, walletId, createTransaction) => onPayAmount(amount, walletId, createTransaction)}
+                onSubmit={(amount, walletId, createTransaction) => onPayAmount(amount, walletId as number, createTransaction)}
               />
             ) : null}
             <SpendInputRow
               label="Log spend"
               submitLabel="Log"
               wallets={wallets}
-              onSubmit={(amount, walletId) => onLogSpend(amount, walletId)}
+              logOnlyToggle
+              onSubmit={(amount, walletId, logOnly) => onLogSpend(amount, walletId, logOnly)}
             />
           </>
         ) : null}

@@ -22,7 +22,13 @@ export type SpendInputRowProps = {
    * expense for it are two separate choices. Bills always create a
    * transaction, so FixedBudgetCard leaves this off. */
   showTransactionToggle?: boolean;
-  onSubmit: (amount: number, walletId: number, createTransaction: boolean) => Promise<void>;
+  /** Shows an "Already spent from wallet" switch, default off. When on, the
+   * wallet picker hides and onSubmit's walletId is null — the caller records
+   * the spend against the budget envelope for money that already left the
+   * wallet via an existing transaction, so it isn't deducted twice. Mutually
+   * exclusive with showTransactionToggle. */
+  logOnlyToggle?: boolean;
+  onSubmit: (amount: number, walletId: number | null, flag: boolean) => Promise<void>;
 };
 
 /** Inline "log an amount against this budget row" control — a compact
@@ -32,7 +38,7 @@ export type SpendInputRowProps = {
  * full amount). A wallet is mandatory: posting an expense without one
  * leaves money_in_hand() unchanged while still reducing the budget's
  * remaining amount, which would push freeMoney up instead of down. */
-export function SpendInputRow({ label, submitLabel, wallets, showTransactionToggle = false, onSubmit }: SpendInputRowProps) {
+export function SpendInputRow({ label, submitLabel, wallets, showTransactionToggle = false, logOnlyToggle = false, onSubmit }: SpendInputRowProps) {
   const theme = useTheme();
   const options = wallets.filter((w) => w.spendable && !w.archived);
   const defaultWalletId = options.find((w) => w.isDefault)?.id ?? options[0]?.id ?? null;
@@ -40,18 +46,20 @@ export function SpendInputRow({ label, submitLabel, wallets, showTransactionTogg
   const [rawText, setRawText] = useState("");
   const [walletId, setWalletId] = useState<number | null>(defaultWalletId);
   const [createTransaction, setCreateTransaction] = useState(true);
+  const [logOnly, setLogOnly] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const parsedAmount = parseIdr(rawText);
-  const canSubmit = parsedAmount !== null && parsedAmount > 0 && walletId !== null && !submitting;
+  const needsWallet = !(logOnlyToggle && logOnly);
+  const canSubmit = parsedAmount !== null && parsedAmount > 0 && (!needsWallet || walletId !== null) && !submitting;
 
   const handleSubmit = async () => {
-    if (!canSubmit || parsedAmount === null || walletId === null) return;
+    if (!canSubmit || parsedAmount === null || (needsWallet && walletId === null)) return;
     setSubmitting(true);
     setError(null);
     try {
-      await onSubmit(parsedAmount, walletId, createTransaction);
+      await onSubmit(parsedAmount, needsWallet ? walletId : null, logOnlyToggle ? logOnly : createTransaction);
       setRawText("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save — check your connection and try again.");
@@ -86,11 +94,13 @@ export function SpendInputRow({ label, submitLabel, wallets, showTransactionTogg
           </Box>
         </Pressable>
       </HStack>
-      <ChipRow>
-        {options.map((w) => (
-          <Chip key={w.id} label={w.name} selected={w.id === walletId} onPress={() => setWalletId(w.id)} />
-        ))}
-      </ChipRow>
+      {needsWallet ? (
+        <ChipRow>
+          {options.map((w) => (
+            <Chip key={w.id} label={w.name} selected={w.id === walletId} onPress={() => setWalletId(w.id)} />
+          ))}
+        </ChipRow>
+      ) : null}
       {showTransactionToggle ? (
         <HStack align="center" justify="space-between">
           <Text variant="caption" tone="muted">
@@ -102,6 +112,25 @@ export function SpendInputRow({ label, submitLabel, wallets, showTransactionTogg
             trackColor={{ false: theme.colors.neutral[700], true: theme.colors.accent }}
           />
         </HStack>
+      ) : null}
+      {logOnlyToggle ? (
+        <Stack gap={0.5}>
+          <HStack align="center" justify="space-between">
+            <Text variant="caption" tone="muted">
+              Already spent from wallet
+            </Text>
+            <Switch
+              value={logOnly}
+              onValueChange={setLogOnly}
+              trackColor={{ false: theme.colors.neutral[700], true: theme.colors.accent }}
+            />
+          </HStack>
+          {logOnly ? (
+            <Text variant="caption" tone="faint">
+              Only updates this budget — the wallet balance already reflects it.
+            </Text>
+          ) : null}
+        </Stack>
       ) : null}
       {error ? (
         <Text variant="label" tone="negative">

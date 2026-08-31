@@ -362,15 +362,17 @@ def transactions_create():
     body = request.get_json(silent=True) or {}
     if "amount" not in body or "direction" not in body:
         return err("VALIDATION_ERROR", "amount and direction are required.", 400)
+    log_only = bool(body.get("logOnly"))
     txn, summary = service.create_transaction(
         amount=body.get("amount"),
         direction=body.get("direction"),
         category_id=body.get("categoryId"),
-        wallet_id=body.get("walletId"),
+        wallet_id=None if log_only else body.get("walletId"),
         transfer_wallet_id=body.get("transferWalletId"),
         occurred_at=body.get("occurredAt"),
         note=body.get("note"),
         goal_id=body.get("goalId"),
+        source="log_only" if log_only else "manual",
     )
     return ok({"transaction": camel_transaction(txn), "summary": summary}, status=201)
 
