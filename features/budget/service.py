@@ -476,7 +476,14 @@ def delete_bill(bill_id):
     repo.delete_bill(bill_id)
 
 
-def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None):
+def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None, transaction_id=None):
+    """Marks a bill paid for the current period. Normally logs a fresh
+    expense for it; pass `transaction_id` to instead settle it with an
+    expense that's already in the ledger (a Wallet sync, an earlier manual
+    entry) — no new row and no balance change, since the money already
+    moved when that transaction was first recorded. The attached one is
+    just re-filed under the bill (and the bill's category, only when it had
+    none of its own)."""
     from db import integrity_errors
 
     bill = repo.get_bill(bill_id)
@@ -486,26 +493,42 @@ def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None):
         raise BudgetValidationError("This bill is not active.")
 
     period = ensure_current_period(get_payroll_day())
-    resolved_wallet_id = wallet_id or bill["wallet_id"]
-    if resolved_wallet_id is None:
-        default_wallet = repo.get_default_wallet()
-        resolved_wallet_id = default_wallet["id"] if default_wallet else None
-    _validate_refs(bill["category_id"], resolved_wallet_id)
 
-    txn = repo.create_transaction(
-        amount=int(amount) if amount is not None else bill["amount"],
-        direction="expense", category_id=bill["category_id"], wallet_id=resolved_wallet_id,
-        period_id=period["id"], bill_id=bill["id"], note=bill["name"], source="bill",
-        occurred_at=_normalize_occurred_at(occurred_at),
-    )
+    if transaction_id is not None:
+        existing = repo.get_transaction(transaction_id)
+        if existing is None or existing["deleted_at"] is not None:
+            raise BudgetNotFound(f"No transaction with id {transaction_id}.")
+        if existing["direction"] != "expense":
+            raise BudgetValidationError("Only an expense can settle a bill.")
+        patch = {"bill_id": bill["id"]}
+        if bill["category_id"] is not None and existing["category_id"] is None:
+            patch["category_id"] = bill["category_id"]
+        repo.update_transaction(transaction_id, **patch)
+        txn = repo.get_transaction(transaction_id)
+    else:
+        resolved_wallet_id = wallet_id or bill["wallet_id"]
+        if resolved_wallet_id is None:
+            default_wallet = repo.get_default_wallet()
+            resolved_wallet_id = default_wallet["id"] if default_wallet else None
+        _validate_refs(bill["category_id"], resolved_wallet_id)
+
+        txn = repo.create_transaction(
+            amount=int(amount) if amount is not None else bill["amount"],
+            direction="expense", category_id=bill["category_id"], wallet_id=resolved_wallet_id,
+            period_id=period["id"], bill_id=bill["id"], note=bill["name"], source="bill",
+            occurred_at=_normalize_occurred_at(occurred_at),
+        )
 
     try:
         repo.create_bill_payment(bill["id"], period["id"], txn["id"], str(now_jkt()))
     except integrity_errors():
         # repo.create_bill_payment() already rolled back and closed its own
-        # (now-failed) connection — soft_delete_transaction() below opens a
-        # fresh one, so there's no poisoned state to carry over here.
-        repo.soft_delete_transaction(txn["id"])
+        # (now-failed) connection — the calls below open fresh ones, so
+        # there's no poisoned state to carry over here.
+        if transaction_id is None:
+            repo.soft_delete_transaction(txn["id"])
+        else:
+            repo.update_transaction(transaction_id, bill_id=None)
         raise BudgetConflict(f"Bill {bill['name']} is already marked paid for this period.")
 
     return txn, get_summary()
@@ -522,7 +545,14 @@ def unpay_bill(bill_id):
         raise BudgetNotFound(f"Bill {bill['name']} is not marked paid for this period.")
 
     if payment["transaction_id"] is not None:
-        repo.soft_delete_transaction(payment["transaction_id"])
+        settling = repo.get_transaction(payment["transaction_id"])
+        if settling is not None and settling["source"] == "bill":
+            # pay_bill() created this one — remove it along with the payment.
+            repo.soft_delete_transaction(payment["transaction_id"])
+        elif settling is not None:
+            # An expense that predated this payment (attached via
+            # /pay { transactionId }) — leave it in the ledger, just untie it.
+            repo.update_transaction(payment["transaction_id"], bill_id=None)
     repo.delete_bill_payment(bill_id, period["id"])
     return bill, get_summary()
 

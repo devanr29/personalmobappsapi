@@ -63,6 +63,45 @@ def test_pay_bill_with_custom_amount_uses_that_amount_not_the_bills(budget_env):
     assert summary["deductions"] == after["total_deductions"]
 
 
+def test_pay_bill_with_transaction_id_attaches_existing_expense_without_new_row(budget_env):
+    # Backs the mobile "Attach an existing transaction" affordance on the
+    # Fixed budget card: a bill settled with an expense already in the
+    # ledger (e.g. pulled from Wallet) links that row instead of logging a
+    # duplicate — no new transaction, no balance change.
+    service, repo = budget_env
+    wallet = repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    bill = service.create_bill("Internet", 150_000)
+    existing, _ = service.create_transaction(amount=150_000, direction="expense", wallet_id=wallet["id"])
+
+    _, total_before = service.list_transactions(direction="expense")
+    txn, summary = service.pay_bill(bill["id"], transaction_id=existing["id"])
+    _, total_after = service.list_transactions(direction="expense")
+
+    assert txn["id"] == existing["id"]
+    assert txn["bill_id"] == bill["id"]
+    assert total_after == total_before  # re-filed, not duplicated
+
+    after = service.build_period_view()
+    assert not any(b["id"] == bill["id"] for b in after["still_owed"])
+    assert summary["deductions"] == after["total_deductions"]
+
+
+def test_unpay_bill_after_attach_keeps_the_expense_and_just_unties_it(budget_env):
+    service, repo = budget_env
+    wallet = repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
+    bill = service.create_bill("Internet", 150_000)
+    existing, _ = service.create_transaction(amount=150_000, direction="expense", wallet_id=wallet["id"])
+    service.pay_bill(bill["id"], transaction_id=existing["id"])
+
+    service.unpay_bill(bill["id"])
+
+    kept = repo.get_transaction(existing["id"])
+    assert kept["deleted_at"] is None  # not soft-deleted, unlike a pay_bill-created row
+    assert kept["bill_id"] is None
+    after = service.build_period_view()
+    assert any(b["id"] == bill["id"] for b in after["still_owed"])
+
+
 def test_pay_bill_twice_in_same_period_is_409(budget_env):
     from features.budget.errors import BudgetConflict
 

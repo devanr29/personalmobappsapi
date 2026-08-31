@@ -290,6 +290,7 @@ def bills_pay(bill_id):
     body = request.get_json(silent=True) or {}
     txn, summary = service.pay_bill(
         bill_id, wallet_id=body.get("walletId"), amount=body.get("amount"), occurred_at=body.get("occurredAt"),
+        transaction_id=body.get("transactionId"),
     )
     return ok({"transaction": camel_transaction(txn), "summary": summary}, status=201)
 
