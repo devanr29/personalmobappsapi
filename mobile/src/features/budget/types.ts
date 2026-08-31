@@ -399,6 +399,10 @@ export interface WalletSyncEntityResult {
   deleted?: number;
   skipped: WalletSyncSkip[];
   errors?: { localId?: number; localIds?: number[]; reason: string }[];
+  // Records pull only: the server bounded this call to a time budget and
+  // stopped at a page boundary — more history remains. pullWalletSync()
+  // keeps calling until this is false.
+  hasMore?: boolean;
 }
 
 export interface WalletPullSummary {

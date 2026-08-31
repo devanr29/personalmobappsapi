@@ -19,6 +19,9 @@ class FakeClient:
     def paginate(self, path, **params):
         return []
 
+    def paginate_pages(self, path, start_offset=0, **params):
+        return [([], None)]
+
     def post(self, path, body):
         return {}
 

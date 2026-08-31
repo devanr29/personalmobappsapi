@@ -212,15 +212,31 @@ class WalletClient:
         """Yields items one at a time across every page. page_size caps at
         the API's documented max (200); callers that want incremental sync
         pass updatedAt=gte.<cursor> in **params."""
-        offset = 0
+        for items, _next_offset in self.paginate_pages(path, page_size=page_size, **params):
+            for item in items:
+                yield item
+
+    def paginate_pages(self, path, page_size=200, start_offset=0, **params):
+        """Like paginate() but yields one whole page at a time as
+        (items, next_offset), where next_offset is None on the last page.
+
+        A caller persisting resume state needs the page boundary AND the
+        offset: a large first backfill (the API caps a user at 20,000
+        records) can't finish inside the mobile client's 20s abort or
+        gunicorn's --timeout, and the result order isn't sorted by
+        updatedAt, so resume has to be by offset — pass the persisted
+        next_offset back as start_offset to pick up where the last run
+        stopped."""
+        offset = start_offset or 0
         limit = min(page_size, 200)
         while True:
             body = self.get(path, limit=limit, offset=offset, **params)
             items = extract_items(body)
-            for item in items:
-                yield item
             next_offset = extract_next_offset(body)
-            if next_offset is None or not items:
+            if not items:
+                next_offset = None
+            yield items, next_offset
+            if next_offset is None:
                 return
             offset = next_offset
 

@@ -56,6 +56,13 @@ export async function setApiUrlOverride(url: string | null): Promise<void> {
 // resolves into a visible, retryable error instead of an eternal spinner.
 const REQUEST_TIMEOUT_MS = 20_000;
 
+// Wallet sync POSTs are the one exception: each call is server-bounded to a
+// short work budget but a single page of records against a far-region DB
+// can still take a while, and the server persists its resume offset either
+// way — so a longer ceiling here just lets that one call finish and report
+// progress instead of aborting into a 499.
+export const LONG_REQUEST_TIMEOUT_MS = 120_000;
+
 export class ApiError extends Error {
   code: string;
   status: number;
@@ -69,20 +76,21 @@ export class ApiError extends Error {
 
 async function requestFull<T, M = Record<string, never>>(
   path: string,
-  options: RequestInit = {},
+  options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<{ data: T; meta: M }> {
+  const { timeoutMs, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs ?? REQUEST_TIMEOUT_MS);
 
   let res: Response;
   try {
     const base = await getApiUrl();
     res = await fetch(`${base}${path}`, {
-      ...options,
+      ...fetchOptions,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${API_TOKEN}`,
-        ...options.headers,
+        ...fetchOptions.headers,
       },
       signal: controller.signal,
     });
@@ -108,7 +116,7 @@ async function requestFull<T, M = Record<string, never>>(
   return body;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   const body = await requestFull<T>(path, options);
   return body.data;
 }
@@ -119,8 +127,12 @@ export const apiClient = {
   // list endpoints like /budget/transactions that paginate via meta
   // (total/limit/offset/hasMore) rather than in the data payload.
   getFull: <T, M = Record<string, never>>(path: string) => requestFull<T, M>(path, { method: "GET" }),
-  post: <T>(path: string, payload?: unknown) =>
-    request<T>(path, { method: "POST", body: payload !== undefined ? JSON.stringify(payload) : undefined }),
+  post: <T>(path: string, payload?: unknown, opts?: { timeoutMs?: number }) =>
+    request<T>(path, {
+      method: "POST",
+      body: payload !== undefined ? JSON.stringify(payload) : undefined,
+      timeoutMs: opts?.timeoutMs,
+    }),
   patch: <T>(path: string, payload?: unknown) =>
     request<T>(path, { method: "PATCH", body: payload !== undefined ? JSON.stringify(payload) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),

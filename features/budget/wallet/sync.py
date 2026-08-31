@@ -40,6 +40,7 @@ check. Push never touches a bank-synced account/record.
 import base64
 import datetime
 import json
+import time
 
 import config
 from database import state_get, state_set
@@ -80,6 +81,34 @@ def _set_cursor(entity_type, value):
     if cursors.get(entity_type) and cursors[entity_type] >= value:
         return
     cursors[entity_type] = value
+    state_set(_CURSOR_STATE_KEY, json.dumps(cursors))
+
+
+# The records backfill can't finish in one bounded request, and the API's
+# result order isn't sorted by updatedAt (docs/BUDGETBAKERS_API.md), so a
+# mid-backfill resume can't use the updatedAt watermark — it walks by
+# offset instead, carrying the running max updatedAt alongside so the real
+# watermark can be set correctly once the whole history has drained. Both
+# live in the same cursors blob and are dropped on completion.
+_RECORD_OFFSET_KEY = "record_offset"
+_RECORD_RUNNING_MAX_KEY = "record_running_max"
+
+
+def _get_record_progress():
+    """(offset, running_max_updated_at) for an in-flight records backfill."""
+    cursors = _get_cursors()
+    return int(cursors.get(_RECORD_OFFSET_KEY) or 0), cursors.get(_RECORD_RUNNING_MAX_KEY)
+
+
+def _set_record_progress(offset, running_max):
+    cursors = _get_cursors()
+    if offset:
+        cursors[_RECORD_OFFSET_KEY] = int(offset)
+        if running_max:
+            cursors[_RECORD_RUNNING_MAX_KEY] = running_max
+    else:
+        cursors.pop(_RECORD_OFFSET_KEY, None)
+        cursors.pop(_RECORD_RUNNING_MAX_KEY, None)
     state_set(_CURSOR_STATE_KEY, json.dumps(cursors))
 
 
@@ -321,7 +350,7 @@ def _pull_standing_orders(client, apply=True) -> dict:
 _RECORD_DATE_FLOOR = "2000-01-01T00:00:00.000Z"
 
 
-def _pull_records(client, cursor, payroll_day, conn, apply=True) -> dict:
+def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) -> dict:
     """Confirmed against the live API 2026-08-12: GET /records silently
     defaults recordDate to the last ~3 months (visible in the response's
     own appliedRecordDateFilters) when no recordDate filter is given —
@@ -329,95 +358,136 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True) -> dict:
     only says "changed since". Without an explicit floor here, every
     record older than ~3 months is dropped from every pull forever, cursor
     or no cursor — pinning recordDate=gte.<floor> is what actually asks
-    for full history."""
-    result = {"created": 0, "updated": 0, "skipped": []}
+    for full history.
+
+    Records is the one unbounded pull (the API caps a user at 20,000).
+    Two safeguards make a large first backfill survivable against the 20s
+    mobile-client abort and gunicorn's --timeout:
+      - `deadline` (a time.monotonic() value) stops the loop at a page
+        boundary and returns hasMore=True, so one request stays short and
+        the caller just calls again until hasMore is False;
+      - progress persists by OFFSET after each fully-applied page (results
+        aren't sorted by updatedAt, so the updatedAt watermark can't be a
+        resume point). The real updatedAt watermark is advanced, and the
+        offset cleared, only once the whole history has drained.
+    """
+    result = {"created": 0, "updated": 0, "skipped": [], "hasMore": False}
     params = {"recordDate": f"gte.{_RECORD_DATE_FLOOR}"}
     if cursor:
         params["updatedAt"] = f"gte.{cursor}"
-    max_updated = cursor
-    for record in client.paginate("/v1/api/records", convertTo="IDR", **params):
-        remote_id = record["id"]
-        updated_at = record.get("updatedAt")
-        if updated_at and (not max_updated or updated_at > max_updated):
-            max_updated = updated_at
+    start_offset, carried_max = _get_record_progress() if apply else (0, None)
+    max_updated = cursor or carried_max
+    # Smaller than the API's 200 max on purpose: the deadline is only
+    # checked at page boundaries, and each row is ~8 DB round-trips, so a
+    # 200-row page against a far-region DB could overrun both the request
+    # budget and gunicorn's --timeout before the first checkpoint.
+    for page, next_offset in client.paginate_pages(
+        "/v1/api/records", convertTo="IDR", start_offset=start_offset, page_size=100, **params
+    ):
+        for record in page:
+            remote_id = record["id"]
+            updated_at = record.get("updatedAt")
+            if updated_at and (not max_updated or updated_at > max_updated):
+                max_updated = updated_at
 
-        account_link = repo.get_link_by_remote(ENTITY_ACCOUNT, record.get("accountId"))
-        if account_link is None:
-            result["skipped"].append({"remoteId": remote_id, "reason": "unknown account — pull accounts first"})
-            continue
-
-        category_remote_id = mapping.record_category_id(record)
-        category_id = None
-        if category_remote_id and not mapping.is_restricted_category(category_remote_id):
-            category_link = repo.get_link_by_remote(ENTITY_CATEGORY, category_remote_id)
-            category_id = category_link["local_id"] if category_link else None
-
-        try:
-            fields = mapping.record_to_transaction_fields(record, category_id=category_id, wallet_id=account_link["local_id"])
-        except ValueError as e:
-            result["skipped"].append({"remoteId": remote_id, "reason": str(e)})
-            continue
-
-        label_ids = [
-            l["local_id"] for l in (
-                repo.get_link_by_remote(ENTITY_LABEL, rlid) for rlid in mapping.record_label_ids(record)
-            ) if l
-        ]
-
-        link = repo.get_link_by_remote(ENTITY_RECORD, remote_id)
-        if link:
-            existing = repo.get_transaction(link["local_id"])
-            local_synced_at = link.get("local_synced_at")
-            local_edited_since_sync = (
-                existing and existing.get("updated_at") and local_synced_at
-                and existing["updated_at"] > local_synced_at
-            )
-            if local_edited_since_sync:
-                result["skipped"].append({"remoteId": remote_id, "reason": "local edit not yet pushed — pull skipped to avoid overwriting it"})
+            account_link = repo.get_link_by_remote(ENTITY_ACCOUNT, record.get("accountId"))
+            if account_link is None:
+                result["skipped"].append({"remoteId": remote_id, "reason": "unknown account — pull accounts first"})
                 continue
-            if apply:
-                repo.update_transaction(
-                    link["local_id"], occurred_at=fields["occurred_at"], amount=fields["amount"],
-                    direction=fields["direction"], category_id=fields["category_id"], wallet_id=fields["wallet_id"],
-                    note=fields["note"],
+
+            category_remote_id = mapping.record_category_id(record)
+            category_id = None
+            if category_remote_id and not mapping.is_restricted_category(category_remote_id):
+                category_link = repo.get_link_by_remote(ENTITY_CATEGORY, category_remote_id)
+                category_id = category_link["local_id"] if category_link else None
+
+            try:
+                fields = mapping.record_to_transaction_fields(record, category_id=category_id, wallet_id=account_link["local_id"])
+            except ValueError as e:
+                result["skipped"].append({"remoteId": remote_id, "reason": str(e)})
+                continue
+
+            label_ids = [
+                l["local_id"] for l in (
+                    repo.get_link_by_remote(ENTITY_LABEL, rlid) for rlid in mapping.record_label_ids(record)
+                ) if l
+            ]
+
+            link = repo.get_link_by_remote(ENTITY_RECORD, remote_id)
+            if link:
+                existing = repo.get_transaction(link["local_id"])
+                local_synced_at = link.get("local_synced_at")
+                local_edited_since_sync = (
+                    existing and existing.get("updated_at") and local_synced_at
+                    and existing["updated_at"] > local_synced_at
                 )
-                repo.set_transaction_labels(link["local_id"], label_ids)
-                # local_synced_at captured AFTER update_transaction() (which
-                # always stamps its own updated_at) — must be >= that
-                # stamp, or this row would look "locally edited" and get
-                # selected for push next run, ping-ponging the same pulled
-                # data straight back to Wallet.
-                repo.upsert_link(ENTITY_RECORD, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
-            result["updated"] += 1
-        else:
+                if local_edited_since_sync:
+                    result["skipped"].append({"remoteId": remote_id, "reason": "local edit not yet pushed — pull skipped to avoid overwriting it"})
+                    continue
+                if apply:
+                    repo.update_transaction(
+                        link["local_id"], occurred_at=fields["occurred_at"], amount=fields["amount"],
+                        direction=fields["direction"], category_id=fields["category_id"], wallet_id=fields["wallet_id"],
+                        note=fields["note"],
+                    )
+                    repo.set_transaction_labels(link["local_id"], label_ids)
+                    # local_synced_at captured AFTER update_transaction() (which
+                    # always stamps its own updated_at) — must be >= that
+                    # stamp, or this row would look "locally edited" and get
+                    # selected for push next run, ping-ponging the same pulled
+                    # data straight back to Wallet.
+                    repo.upsert_link(ENTITY_RECORD, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
+                result["updated"] += 1
+            else:
+                if apply:
+                    period_id = _period_id_for(fields["occurred_at"], payroll_day, conn)
+                    txn = repo.create_transaction(
+                        amount=fields["amount"], direction=fields["direction"], category_id=fields["category_id"],
+                        wallet_id=fields["wallet_id"], period_id=period_id, note=fields["note"],
+                        source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"],
+                    )
+                    repo.set_transaction_labels(txn["id"], label_ids)
+                    repo.upsert_link(ENTITY_RECORD, txn["id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
+                result["created"] += 1
+
+        # Page fully applied. More to come -> persist offset + running max
+        # so a killed/timed-out run resumes here; stop if the budget's spent.
+        if next_offset is not None:
             if apply:
-                period_id = _period_id_for(fields["occurred_at"], payroll_day, conn)
-                txn = repo.create_transaction(
-                    amount=fields["amount"], direction=fields["direction"], category_id=fields["category_id"],
-                    wallet_id=fields["wallet_id"], period_id=period_id, note=fields["note"],
-                    source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"],
-                )
-                repo.set_transaction_labels(txn["id"], label_ids)
-                repo.upsert_link(ENTITY_RECORD, txn["id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
-            result["created"] += 1
+                _set_record_progress(next_offset, max_updated)
+            if deadline is not None and time.monotonic() >= deadline:
+                result["hasMore"] = True
+                return result
+
+    # Whole history drained: now it's safe to advance the real updatedAt
+    # watermark (steady-state incremental syncs key off it) and drop the
+    # backfill progress.
     if apply:
         _set_cursor(ENTITY_RECORD, max_updated)
+        _set_record_progress(0, None)
     return result
 
 
-def pull_all(apply=True) -> dict:
+def pull_all(apply=True, max_seconds=None) -> dict:
     """Runs every entity pull in dependency order. Returns per-entity
     summaries; raises (rather than partially swallowing) on the first
     hard failure — features/budget/errors.py's WalletError subclasses all
     map to the standard envelope, so the blueprint route surfaces exactly
     what failed. Whatever ran before the failure already committed its
-    writes and advanced its own cursor, so a retry resumes past it."""
+    writes and advanced its own cursor, so a retry resumes past it.
+
+    `max_seconds` bounds the records pull (the only unbounded one): once
+    the budget is spent it stops at a page boundary and returns with
+    summary["records"]["hasMore"] True. The caller keeps calling pull_all()
+    until that flag is False — each call resumes from the persisted offset
+    (_get_record_progress). Left None (preview, tests) it drains everything."""
     from features.budget.service import get_payroll_day
 
     client = WalletClient()
     if not client.configured():
         raise WalletNotConfigured("WALLET_API_TOKEN is not set.")
     cursors = _get_cursors()
+    deadline = (time.monotonic() + max_seconds) if max_seconds else None
     conn = db_conn()
     try:
         summary = {
@@ -426,7 +496,7 @@ def pull_all(apply=True) -> dict:
             "labels": _pull_labels(client, apply=apply),
             "goals": _pull_goals(client, cursors.get(ENTITY_GOAL), apply=apply),
             "bills": _pull_standing_orders(client, apply=apply),
-            "records": _pull_records(client, cursors.get(ENTITY_RECORD), get_payroll_day(), conn, apply=apply),
+            "records": _pull_records(client, cursors.get(ENTITY_RECORD), get_payroll_day(), conn, apply=apply, deadline=deadline),
         }
     finally:
         conn.close()

@@ -1,4 +1,4 @@
-import { apiClient } from "@/api/client";
+import { apiClient, LONG_REQUEST_TIMEOUT_MS } from "@/api/client";
 import type { BudgetSnapshot } from "@/api/types";
 import type {
   Alert,
@@ -20,6 +20,7 @@ import type {
   Wallet,
   WalletPullSummary,
   WalletPushSummary,
+  WalletSyncEntityResult,
   WalletSyncPreview,
   WalletSyncStatus,
 } from "./types";
@@ -273,19 +274,66 @@ export function getWalletSyncStatus() {
 }
 
 export function previewWalletSync() {
-  return apiClient.post<WalletSyncPreview>("/api/budget/sync/wallet/preview");
+  return apiClient.post<WalletSyncPreview>("/api/budget/sync/wallet/preview", undefined, {
+    timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+  });
 }
 
-export function pullWalletSync() {
-  return apiClient.post<{ pull: WalletPullSummary; summary: BudgetSnapshot | null }>("/api/budget/sync/wallet/pull");
+// The server bounds each records pull to a ~10s budget and returns
+// pull.records.hasMore when more history is still paging in (a first
+// backfill is thousands of rows and would otherwise blow the 20s request
+// abort). Keep calling until it's caught up; each call resumes from the
+// server-side per-page cursor. The cap is a safety stop, not an expected
+// limit — ~40 rounds x a few hundred records is a very large ledger.
+const SYNC_MAX_ROUNDS = 40;
+
+function accumulateRecords(into: WalletSyncEntityResult, from: WalletSyncEntityResult) {
+  into.created += from.created ?? 0;
+  into.updated = (into.updated ?? 0) + (from.updated ?? 0);
+  into.skipped = [...into.skipped, ...(from.skipped ?? [])];
+  if (from.errors?.length) into.errors = [...(into.errors ?? []), ...from.errors];
+}
+
+export async function pullWalletSync(): Promise<{ pull: WalletPullSummary; summary: BudgetSnapshot | null }> {
+  let last: { pull: WalletPullSummary; summary: BudgetSnapshot | null } | null = null;
+  const records: WalletSyncEntityResult = { created: 0, updated: 0, skipped: [] };
+  for (let round = 0; round < SYNC_MAX_ROUNDS; round++) {
+    const res = await apiClient.post<{ pull: WalletPullSummary; summary: BudgetSnapshot | null }>(
+      "/api/budget/sync/wallet/pull",
+      undefined,
+      { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    );
+    accumulateRecords(records, res.pull.records);
+    last = res;
+    if (!res.pull.records.hasMore) break;
+  }
+  last!.pull.records = { ...records, hasMore: false };
+  return last!;
 }
 
 export function pushWalletSync() {
-  return apiClient.post<{ push: WalletPushSummary }>("/api/budget/sync/wallet/push");
+  return apiClient.post<{ push: WalletPushSummary }>("/api/budget/sync/wallet/push", undefined, {
+    timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+  });
 }
 
-export function runWalletSync() {
-  return apiClient.post<{ pull: WalletPullSummary; push: WalletPushSummary; summary: BudgetSnapshot | null }>(
-    "/api/budget/sync/wallet",
-  );
+export async function runWalletSync(): Promise<{
+  pull: WalletPullSummary;
+  push: WalletPushSummary | null;
+  summary: BudgetSnapshot | null;
+}> {
+  let last: { pull: WalletPullSummary; push: WalletPushSummary | null; summary: BudgetSnapshot | null } | null = null;
+  const records: WalletSyncEntityResult = { created: 0, updated: 0, skipped: [] };
+  for (let round = 0; round < SYNC_MAX_ROUNDS; round++) {
+    const res = await apiClient.post<{
+      pull: WalletPullSummary;
+      push: WalletPushSummary | null;
+      summary: BudgetSnapshot | null;
+    }>("/api/budget/sync/wallet", undefined, { timeoutMs: LONG_REQUEST_TIMEOUT_MS });
+    accumulateRecords(records, res.pull.records);
+    last = res;
+    if (!res.pull.records.hasMore) break;
+  }
+  last!.pull.records = { ...records, hasMore: false };
+  return last!;
 }

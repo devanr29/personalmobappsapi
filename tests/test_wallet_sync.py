@@ -52,6 +52,10 @@ class FakeClient:
         self.paginate_calls.append((path, params))
         return list(self.pages.get(path, []))
 
+    def paginate_pages(self, path, start_offset=0, **params):
+        self.paginate_calls.append((path, params))
+        return [(list(self.pages.get(path, [])), None)]
+
     def post(self, path, body):
         self.post_calls.append((path, body))
         return self.post_response
@@ -232,6 +236,68 @@ def test_pull_records_does_not_clobber_an_unpushed_local_edit():
         assert repo.get_transaction(txn["id"])["amount"] == 10000
     finally:
         _cleanup_transaction(txn["id"])
+        _cleanup_wallet(wallet["id"])
+
+
+def test_pull_records_deadline_stops_at_page_boundary_and_resumes_by_offset():
+    """A first backfill too big for one bounded request: the run stops at a
+    page boundary, reports hasMore, persists its offset, and the next run
+    resumes from there. The real updatedAt watermark stays unset until the
+    whole history has drained (results aren't sorted by updatedAt, so a
+    mid-backfill watermark would strand later-but-older rows)."""
+    import time as _time
+
+    wallet = repo.create_wallet("_TestWalletSyncBackfill", opening_balance=0)
+    repo.upsert_link(sync.ENTITY_ACCOUNT, wallet["id"], "acc-bf", local_synced_at="2020-01-01")
+
+    def _rec(n):
+        return {
+            "id": f"bf-{n}", "accountId": "acc-bf",
+            "convertedAmount": {"value": -1000 * n}, "recordDate": "2026-08-01T00:00:00Z",
+            "updatedAt": f"2026-08-0{n}T00:00:00Z",
+        }
+
+    class PagedClient:
+        pages = [[_rec(1), _rec(2)], [_rec(3), _rec(4)], [_rec(5)]]
+
+        def __init__(self):
+            self.offsets_seen = []
+
+        def configured(self):
+            return True
+
+        def paginate_pages(self, path, start_offset=0, **params):
+            self.offsets_seen.append(start_offset)
+            idx = start_offset // 2
+            while idx < len(self.pages):
+                page = self.pages[idx]
+                idx += 1
+                yield page, (idx * 2 if idx < len(self.pages) else None)
+
+    client = PagedClient()
+    past = _time.monotonic() - 1
+    conn = db_conn()
+    try:
+        r1 = sync._pull_records(client, cursor=None, payroll_day=25, conn=conn, apply=True, deadline=past)
+        assert (r1["created"], r1["hasMore"]) == (2, True)
+        assert sync._get_record_progress()[0] == 2
+        assert sync._get_cursors().get(sync.ENTITY_RECORD) is None  # watermark NOT advanced mid-backfill
+
+        r2 = sync._pull_records(client, cursor=None, payroll_day=25, conn=conn, apply=True, deadline=past)
+        assert (r2["created"], r2["hasMore"]) == (2, True)
+        assert sync._get_record_progress()[0] == 4
+
+        r3 = sync._pull_records(client, cursor=None, payroll_day=25, conn=conn, apply=True, deadline=None)
+        assert (r3["created"], r3["hasMore"]) == (1, False)
+        assert sync._get_record_progress() == (0, None)  # backfill progress cleared
+        assert sync._get_cursors().get(sync.ENTITY_RECORD) == "2026-08-05T00:00:00Z"  # watermark advanced now
+        assert client.offsets_seen == [0, 2, 4]
+    finally:
+        for n in range(1, 6):
+            link = repo.get_link_by_remote(sync.ENTITY_RECORD, f"bf-{n}")
+            if link:
+                _cleanup_transaction(link["local_id"])
+        conn.close()
         _cleanup_wallet(wallet["id"])
 
 

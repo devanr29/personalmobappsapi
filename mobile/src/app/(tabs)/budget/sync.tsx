@@ -110,7 +110,7 @@ export default function BudgetWalletSyncScreen() {
                     label="Sync now"
                     description="Pull, then push."
                     busy={busy === "sync"}
-                    onPress={() => runAction("sync", () => runWalletSync())}
+                    onPress={() => runAction("sync", () => runWalletSync().then((r) => ({ pull: r.pull, push: r.push ?? undefined })))}
                   />
                 </Stack>
               </Card>

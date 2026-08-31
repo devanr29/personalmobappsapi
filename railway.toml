@@ -2,4 +2,9 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "gunicorn app:app --workers 1 --threads 2 --timeout 120 --bind 0.0.0.0:$PORT"
+# --timeout 300: the wallet-sync pull is bounded to a ~10s work budget per
+# request, but a single page of records against a far-region Postgres can
+# still run long; the client (mobile + scripts) waits, and the sync
+# persists its resume offset either way, so the worker must not be culled
+# mid-page.
+startCommand = "gunicorn app:app --workers 1 --threads 2 --timeout 300 --bind 0.0.0.0:$PORT"

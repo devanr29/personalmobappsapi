@@ -520,9 +520,18 @@ def wallet_sync_preview():
     return ok(wallet_sync.preview())
 
 
+# One synchronous request must finish well inside the mobile client's 20s
+# abort (mobile/src/api/client.ts) and gunicorn's --timeout. The records
+# pull stops at a page boundary once this budget is spent and reports
+# {"records": {"hasMore": true}}; the caller re-POSTs until it's false,
+# each call resuming from the persisted per-page cursor.
+_SYNC_PULL_BUDGET_SECONDS = 10
+
+
 @budget_bp.route("/sync/wallet/pull", methods=["POST"])
 def wallet_sync_pull():
-    return ok({"pull": wallet_sync.pull_all(apply=True), "summary": service.get_summary()})
+    pull = wallet_sync.pull_all(apply=True, max_seconds=_SYNC_PULL_BUDGET_SECONDS)
+    return ok({"pull": pull, "summary": service.get_summary()})
 
 
 @budget_bp.route("/sync/wallet/push", methods=["POST"])
@@ -532,8 +541,13 @@ def wallet_sync_push():
 
 @budget_bp.route("/sync/wallet", methods=["POST"])
 def wallet_sync_run():
-    pull_result = wallet_sync.pull_all(apply=True)
-    push_result = wallet_sync.push_all(apply=True)
+    pull_result = wallet_sync.pull_all(apply=True, max_seconds=_SYNC_PULL_BUDGET_SECONDS)
+    # While the historical backfill is still paging in, there is nothing
+    # local to push yet — skip the (DB-heavy) push enumeration until the
+    # pull side has fully caught up.
+    push_result = None
+    if not pull_result["records"].get("hasMore"):
+        push_result = wallet_sync.push_all(apply=True)
     return ok({"pull": pull_result, "push": push_result, "summary": service.get_summary()})
 
 
