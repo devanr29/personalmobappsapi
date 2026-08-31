@@ -123,6 +123,15 @@ export default function BudgetWalletSyncScreen() {
                 </Card>
               ) : null}
 
+              {lastResult?.pull?.records?.hasMore ? (
+                <Card>
+                  <Text variant="label" tone="secondary">
+                    Still catching up — Wallet has more history to page in. Tap Pull (or Sync now) again to
+                    continue; each run resumes where the last one stopped.
+                  </Text>
+                </Card>
+              ) : null}
+
               {lastResult ? <ResultCard result={lastResult} /> : null}
             </>
           )}

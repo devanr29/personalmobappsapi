@@ -1,4 +1,4 @@
-import { CalendarBlank, CheckCircle, CircleIcon, PencilSimple } from "phosphor-react-native";
+import { CalendarBlank, CheckCircle, CircleIcon, Paperclip, PencilSimple } from "phosphor-react-native";
 import { ActivityIndicator } from "react-native";
 
 import { ExpandableCard } from "@/components/ExpandableCard";
@@ -20,6 +20,11 @@ export type FixedBudgetCardProps = {
   onEdit: () => void;
   onTogglePaid: () => void;
   onPayAmount: (amount: number, walletId: number) => Promise<void>;
+  /** Opens the picker for settling this bill with an expense that's already
+   * in the ledger (e.g. pulled from Wallet) instead of logging a fresh
+   * payment — see AttachTransactionSheet / service.pay_bill's transaction_id
+   * path. */
+  onAttachTransaction: () => void;
 };
 
 /** One fixed monthly obligation (a bill — rent, subscriptions, etc.) as its
@@ -33,7 +38,7 @@ export type FixedBudgetCardProps = {
  * the case where the real payment doesn't match the bill's configured
  * amount (e.g. rent paid at a discount) — service.pay_bill already accepts
  * a custom amount, only unused by the mobile UI until now. */
-export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onEdit, onTogglePaid, onPayAmount }: FixedBudgetCardProps) {
+export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onEdit, onTogglePaid, onPayAmount, onAttachTransaction }: FixedBudgetCardProps) {
   const theme = useTheme();
 
   return (
@@ -74,12 +79,26 @@ export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onE
           </HStack>
         </PressableScale>
         {!paidThisPeriod ? (
-          <SpendInputRow
-            label="Pay a different amount"
-            submitLabel="Pay"
-            wallets={wallets}
-            onSubmit={(amount, walletId) => onPayAmount(amount, walletId)}
-          />
+          <>
+            <SpendInputRow
+              label="Pay a different amount"
+              submitLabel="Pay"
+              wallets={wallets}
+              onSubmit={(amount, walletId) => onPayAmount(amount, walletId)}
+            />
+            <PressableScale
+              onPress={onAttachTransaction}
+              accessibilityRole="button"
+              accessibilityLabel={`Attach an existing transaction to ${bill.name}`}
+            >
+              <HStack align="center" gap={1.5}>
+                <Paperclip size={14} color={theme.colors.accent} />
+                <Text variant="caption" tone="accent">
+                  Attach an existing transaction
+                </Text>
+              </HStack>
+            </PressableScale>
+          </>
         ) : null}
         <PressableScale onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${bill.name}`}>
           <HStack align="center" gap={1.5}>

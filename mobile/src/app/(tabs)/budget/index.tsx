@@ -15,7 +15,7 @@ import { useBudgetRevision } from "@/features/budget/BudgetProvider";
 import {
   createTransaction, getBreakdown, listBills, listCategories, payBill, payCategory, snapshotFromBreakdown, unpayBill, unpayCategory,
 } from "@/features/budget/api";
-import { AttachTransactionSheet } from "@/features/budget/components/AttachTransactionSheet";
+import { AttachTransactionSheet, type AttachTarget } from "@/features/budget/components/AttachTransactionSheet";
 import { BudgetItemSheet } from "@/features/budget/components/BudgetItemSheet";
 import { FixedBudgetCard } from "@/features/budget/components/FixedBudgetCard";
 import { TransactionSheet } from "@/features/budget/components/TransactionSheet";
@@ -65,7 +65,7 @@ export default function BudgetOverviewScreen() {
   const [budgetSheet, setBudgetSheet] = useState<{ itemKind: "category" | "bill"; editing: Category | Bill | null } | null>(null);
   const [payPendingBillId, setPayPendingBillId] = useState<number | null>(null);
   const [payPendingCategoryId, setPayPendingCategoryId] = useState<number | null>(null);
-  const [attachTarget, setAttachTarget] = useState<{ id: number; name: string } | null>(null);
+  const [attachTarget, setAttachTarget] = useState<AttachTarget | null>(null);
 
   const fetcher = useCallback(async (): Promise<OverviewResource> => {
     const [breakdown, bills, categories] = await Promise.all([getBreakdown(), listBills(), listCategories("variable")]);
@@ -254,6 +254,7 @@ export default function BudgetOverviewScreen() {
                       onEdit={() => setBudgetSheet({ itemKind: "bill", editing: bill })}
                       onTogglePaid={() => handleTogglePaid(bill, !stillOwedBillIds.has(bill.id))}
                       onPayAmount={(amount, walletId) => handlePayAmount(bill, amount, walletId)}
+                      onAttachTransaction={() => setAttachTarget({ kind: "bill", id: bill.id, name: bill.name })}
                     />
                   ))}
                 </CollapsibleSection>
@@ -281,7 +282,7 @@ export default function BudgetOverviewScreen() {
                           if (category) setBudgetSheet({ itemKind: "category", editing: category });
                         }}
                         onLogSpend={(amount, walletId) => handleLogSpend(item.categoryId as number, amount, walletId)}
-                        onAttachTransaction={() => setAttachTarget({ id: item.categoryId as number, name: item.name })}
+                        onAttachTransaction={() => setAttachTarget({ kind: "category", id: item.categoryId as number, name: item.name })}
                         onTogglePaid={() => handleToggleCategoryPaid(item.categoryId as number, item.paid)}
                         onPayAmount={(amount, walletId, createTransactionFlag) =>
                           handlePayCategoryAmount(item.categoryId as number, amount, walletId, createTransactionFlag)
@@ -309,8 +310,7 @@ export default function BudgetOverviewScreen() {
         visible={attachTarget !== null}
         onClose={() => setAttachTarget(null)}
         onAttached={handleSaved}
-        categoryId={attachTarget?.id ?? 0}
-        categoryName={attachTarget?.name ?? ""}
+        target={attachTarget ?? { kind: "category", id: 0, name: "" }}
       />
     </SafeAreaView>
   );

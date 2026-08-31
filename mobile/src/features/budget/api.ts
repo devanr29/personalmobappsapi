@@ -146,7 +146,10 @@ export function deleteBill(id: number) {
   return apiClient.delete<{ id: number; deleted: boolean }>(`/api/budget/bills/${id}`);
 }
 
-export function payBill(id: number, input?: { walletId?: number; amount?: number; occurredAt?: string }) {
+export function payBill(
+  id: number,
+  input?: { walletId?: number; amount?: number; occurredAt?: string; transactionId?: number },
+) {
   return apiClient.post<{ transaction: Transaction; summary: BudgetSnapshot | null }>(
     `/api/budget/bills/${id}/pay`,
     input ?? {},
@@ -283,8 +286,10 @@ export function previewWalletSync() {
 // pull.records.hasMore when more history is still paging in (a first
 // backfill is thousands of rows and would otherwise blow the 20s request
 // abort). Keep calling until it's caught up; each call resumes from the
-// server-side per-page cursor. The cap is a safety stop, not an expected
-// limit — ~40 rounds x a few hundred records is a very large ledger.
+// server-side per-page cursor. The cap is a safety stop against an
+// unbounded spinner — when it's hit, the returned records.hasMore stays
+// true so the caller can tell the user to run Pull again (each run picks
+// up from where the last one stopped).
 const SYNC_MAX_ROUNDS = 40;
 
 function accumulateRecords(into: WalletSyncEntityResult, from: WalletSyncEntityResult) {
@@ -297,6 +302,7 @@ function accumulateRecords(into: WalletSyncEntityResult, from: WalletSyncEntityR
 export async function pullWalletSync(): Promise<{ pull: WalletPullSummary; summary: BudgetSnapshot | null }> {
   let last: { pull: WalletPullSummary; summary: BudgetSnapshot | null } | null = null;
   const records: WalletSyncEntityResult = { created: 0, updated: 0, skipped: [] };
+  let hasMore = false;
   for (let round = 0; round < SYNC_MAX_ROUNDS; round++) {
     const res = await apiClient.post<{ pull: WalletPullSummary; summary: BudgetSnapshot | null }>(
       "/api/budget/sync/wallet/pull",
@@ -305,9 +311,12 @@ export async function pullWalletSync(): Promise<{ pull: WalletPullSummary; summa
     );
     accumulateRecords(records, res.pull.records);
     last = res;
-    if (!res.pull.records.hasMore) break;
+    hasMore = !!res.pull.records.hasMore;
+    if (!hasMore) break;
   }
-  last!.pull.records = { ...records, hasMore: false };
+  // hasMore is true here only if SYNC_MAX_ROUNDS ran out with history still
+  // paging in — surfaced truthfully so the caller can prompt another Pull.
+  last!.pull.records = { ...records, hasMore };
   return last!;
 }
 
@@ -324,6 +333,7 @@ export async function runWalletSync(): Promise<{
 }> {
   let last: { pull: WalletPullSummary; push: WalletPushSummary | null; summary: BudgetSnapshot | null } | null = null;
   const records: WalletSyncEntityResult = { created: 0, updated: 0, skipped: [] };
+  let hasMore = false;
   for (let round = 0; round < SYNC_MAX_ROUNDS; round++) {
     const res = await apiClient.post<{
       pull: WalletPullSummary;
@@ -332,8 +342,10 @@ export async function runWalletSync(): Promise<{
     }>("/api/budget/sync/wallet", undefined, { timeoutMs: LONG_REQUEST_TIMEOUT_MS });
     accumulateRecords(records, res.pull.records);
     last = res;
-    if (!res.pull.records.hasMore) break;
+    hasMore = !!res.pull.records.hasMore;
+    if (!hasMore) break;
   }
-  last!.pull.records = { ...records, hasMore: false };
+  // See pullWalletSync: a true here means the round cap was hit mid-backfill.
+  last!.pull.records = { ...records, hasMore };
   return last!;
 }

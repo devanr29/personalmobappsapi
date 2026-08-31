@@ -7,30 +7,40 @@ import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatRupiah } from "@/utils/currency";
-import { listTransactions, updateTransaction } from "../api";
+import { listTransactions, payBill, updateTransaction } from "../api";
 import type { Transaction } from "../types";
 import { formatBudgetDayHeader } from "../utils/budgetDate";
+
+/** What a picked transaction gets attached to. `category` re-files an
+ * expense under a variable-budget envelope; `bill` settles a fixed bill
+ * for the current period. */
+export type AttachTarget =
+  | { kind: "category"; id: number; name: string }
+  | { kind: "bill"; id: number; name: string };
 
 export type AttachTransactionSheetProps = {
   visible: boolean;
   onClose: () => void;
-  /** Fired after a transaction is successfully re-filed under this category. */
+  /** Fired after a transaction is successfully re-filed. */
   onAttached: () => void;
-  categoryId: number;
-  categoryName: string;
+  target: AttachTarget;
 };
 
 const CANDIDATE_LIMIT = 25;
 
 /** Re-files an expense that already exists in the ledger (a Wallet sync, an
- * earlier manual entry) under a variable-budget category, so its amount
- * starts counting toward that category's envelope. It's a plain
- * PATCH /transactions/:id { categoryId } — no new row and no balance change,
- * since the money already moved when the transaction was first recorded.
+ * earlier manual entry) so it counts against a budget line — no new row and
+ * no balance change, since the money already moved when the transaction was
+ * first recorded.
  *
- * spend_by_category matches on period too, so a transaction only shifts this
- * period's `remaining` if it happened this period — the copy says as much. */
-export function AttachTransactionSheet({ visible, onClose, onAttached, categoryId, categoryName }: AttachTransactionSheetProps) {
+ *  - category target: PATCH /transactions/:id { categoryId } — it starts
+ *    counting toward that variable envelope. spend_by_category matches on
+ *    period too, so it only shifts this period's `remaining` if it happened
+ *    this period.
+ *  - bill target: POST /bills/:id/pay { transactionId } — it settles the
+ *    fixed bill for the current period, like "Mark as paid" but without
+ *    logging a duplicate payment. */
+export function AttachTransactionSheet({ visible, onClose, onAttached, target }: AttachTransactionSheetProps) {
   const theme = useTheme();
   const [items, setItems] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
@@ -38,10 +48,10 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, categoryI
   const [attachingId, setAttachingId] = useState<number | null>(null);
 
   // Reset + arm a load when the sheet opens (or reopens for another
-  // category) — a render-phase adjustment keyed on session identity, the
+  // target) — a render-phase adjustment keyed on session identity, the
   // same pattern TransactionSheet uses, so it doesn't cascade the way a
   // synchronous setState in the effect body would.
-  const sessionKey = visible ? String(categoryId) : null;
+  const sessionKey = visible ? `${target.kind}:${target.id}` : null;
   const [openFor, setOpenFor] = useState<string | null>(null);
   if (sessionKey !== null && openFor !== sessionKey) {
     setOpenFor(sessionKey);
@@ -56,8 +66,12 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, categoryI
     let cancelled = false;
     listTransactions({ direction: "expense", limit: CANDIDATE_LIMIT })
       .then((page) => {
-        // Rows already under this category would attach to a no-op.
-        if (!cancelled) setItems(page.items.filter((t) => t.categoryId !== categoryId));
+        if (cancelled) return;
+        // A category attach onto a row already under that category is a
+        // no-op; for a bill any expense is a valid settlement.
+        setItems(
+          target.kind === "category" ? page.items.filter((t) => t.categoryId !== target.id) : page.items,
+        );
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Couldn't load transactions.");
@@ -68,13 +82,17 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, categoryI
     return () => {
       cancelled = true;
     };
-  }, [visible, categoryId]);
+  }, [visible, target.kind, target.id]);
 
   const handleAttach = async (txn: Transaction) => {
     setAttachingId(txn.id);
     setError(null);
     try {
-      await updateTransaction(txn.id, { categoryId });
+      if (target.kind === "category") {
+        await updateTransaction(txn.id, { categoryId: target.id });
+      } else {
+        await payBill(target.id, { transactionId: txn.id });
+      }
       onAttached();
       onClose();
     } catch (err) {
@@ -82,6 +100,11 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, categoryI
       setAttachingId(null);
     }
   };
+
+  const subtitle =
+    target.kind === "category"
+      ? `Pick an expense from this period — it starts counting toward ${target.name} without adding a new entry.`
+      : `Pick the expense that already paid ${target.name} — it settles the bill for this period without logging a duplicate.`;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -93,7 +116,7 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, categoryI
             <Stack gap={1}>
               <Text variant="heading">Attach a transaction</Text>
               <Text variant="caption" tone="muted">
-                Pick an expense from this period — it starts counting toward {categoryName} without adding a new entry.
+                {subtitle}
               </Text>
             </Stack>
 
