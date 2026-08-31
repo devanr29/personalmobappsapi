@@ -154,3 +154,36 @@ def test_get_transactions_list_uncategorized_row_not_dropped(repo, period_id):
     assert total == 1
     assert items[0]["category_name"] is None
     assert items[0]["wallet_name"] is None
+
+
+def test_batch_writes_share_one_connection_and_dont_autocommit(repo, period_id):
+    """create_transaction/upsert_link/update_transaction/set_transaction_labels
+    with an explicit conn run on that connection, don't commit, and return
+    the lean shape — the wallet-sync backfill relies on this to apply a
+    whole page in one transaction (one commit) instead of ~13 round-trips
+    per row."""
+    from db import db_conn
+
+    wallet = repo.create_wallet("Cash", opening_balance=100_000)
+
+    conn = db_conn()
+    try:
+        txn_id = repo.create_transaction(
+            9_000, "expense", wallet_id=wallet["id"], period_id=period_id, conn=conn
+        )
+        assert isinstance(txn_id, int)  # lean return, not the full row dict
+        assert repo.upsert_link("record", txn_id, "remote-xyz", conn=conn) is None
+        # Visible on this connection pre-commit...
+        assert repo.get_transaction(txn_id, conn=conn) is not None
+    finally:
+        conn.rollback()
+        conn.close()
+
+    # ...and gone after rollback, because nothing committed mid-batch.
+    assert repo.get_transaction(txn_id) is None
+    assert repo.get_link_by_remote("record", "remote-xyz") is None
+
+    # Same helpers with no conn still autocommit and return the full row.
+    row = repo.create_transaction(3_000, "expense", wallet_id=wallet["id"], period_id=period_id)
+    assert isinstance(row, dict) and row["amount"] == 3_000
+    assert repo.get_transaction(row["id"]) is not None

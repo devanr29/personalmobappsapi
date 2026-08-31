@@ -178,23 +178,30 @@ def get_status() -> dict:
 # ================================================================
 # SHARED HELPERS
 # ================================================================
-def _period_id_for(date_str, payroll_day, conn):
+def _period_id_for(date_str, payroll_day, conn, cache=None):
     """Get-or-create the budget_periods row covering an arbitrary date —
     periods.ensure_current_period() only covers *today*, but a pull can
     backfill historical records that need their own (possibly already-
     closed) period. Duplicates ensure_current_period()'s small get-or-
-    create query rather than changing that function's contract."""
+    create query rather than changing that function's contract.
+
+    `cache` (a dict keyed by period start_date) collapses the get-half to
+    one query per distinct period per page instead of one per record — a
+    page of 30 records usually spans only 1-2 periods. Does NOT commit:
+    the INSERT rides the caller's page transaction (see _pull_records)."""
     d = datetime.date.fromisoformat((date_str or "")[:10])
     start_date, end_date = period_bounds(d, payroll_day)
+    if cache is not None and start_date in cache:
+        return cache[start_date]
     row = conn.execute("SELECT id FROM budget_periods WHERE start_date = ?", (start_date,)).fetchone()
-    if row:
-        return row[0]
-    conn.execute(
-        "INSERT INTO budget_periods (start_date, end_date, payroll_day, expected_income) VALUES (?, ?, ?, 0)",
-        (start_date, end_date, payroll_day),
-    )
-    conn.commit()
-    row = conn.execute("SELECT id FROM budget_periods WHERE start_date = ?", (start_date,)).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO budget_periods (start_date, end_date, payroll_day, expected_income) VALUES (?, ?, ?, 0)",
+            (start_date, end_date, payroll_day),
+        )
+        row = conn.execute("SELECT id FROM budget_periods WHERE start_date = ?", (start_date,)).fetchone()
+    if cache is not None:
+        cache[start_date] = row[0]
     return row[0]
 
 
@@ -367,7 +374,7 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
     for full history.
 
     Records is the one unbounded pull (the API caps a user at 20,000).
-    Two safeguards make a large first backfill survivable against the 20s
+    Three safeguards make a large first backfill survivable against the
     mobile-client abort and gunicorn's --timeout:
       - `deadline` (a time.monotonic() value) stops the loop at a page
         boundary and returns hasMore=True, so one request stays short and
@@ -375,7 +382,13 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
       - progress persists by OFFSET after each fully-applied page (results
         aren't sorted by updatedAt, so the updatedAt watermark can't be a
         resume point). The real updatedAt watermark is advanced, and the
-        offset cleared, only once the whole history has drained.
+        offset cleared, only once the whole history has drained;
+      - every write for a page runs on the ONE caller-owned `conn` in a
+        single transaction, committed once at the page boundary. Against a
+        Postgres a ~600ms round-trip away (Railway logs, 2026-08), the old
+        per-row INSERT+commit+re-SELECT for the txn, the labels and the
+        link was ~13 round-trips/record — a shared transaction with no
+        per-row commit and no re-fetch is ~4.
     """
     result = {"created": 0, "updated": 0, "skipped": [], "hasMore": False}
     params = {"recordDate": f"gte.{_RECORD_DATE_FLOOR}"}
@@ -383,12 +396,11 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
         params["updatedAt"] = f"gte.{cursor}"
     start_offset, carried_max = _get_record_progress() if apply else (0, None)
     max_updated = cursor or carried_max
-    # Far smaller than the API's 200 max on purpose: the deadline is only
-    # checked at page boundaries, and each row is ~8 DB round-trips (~50ms
-    # each when the app and Postgres are in different regions), so a page
-    # has to stay small enough that ONE of them finishes inside the request
-    # budget and gunicorn's --timeout. ~30 rows ≈ 15s in the slow case.
+    # Bounded so ONE page finishes inside gunicorn's --timeout and the
+    # client's ceiling even in the slow-DB case (~4 round-trips/record x
+    # ~600ms x 30 ≈ 75s); the deadline is only checked between pages.
     page_size = 30 if deadline is not None else 200
+    period_cache: dict = {}
     for page, next_offset in client.paginate_pages(
         "/v1/api/records", convertTo="IDR", start_offset=start_offset, page_size=page_size, **params
     ):
@@ -398,7 +410,7 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
             if updated_at and (not max_updated or updated_at > max_updated):
                 max_updated = updated_at
 
-            account_link = repo.get_link_by_remote(ENTITY_ACCOUNT, record.get("accountId"))
+            account_link = repo.get_link_by_remote(ENTITY_ACCOUNT, record.get("accountId"), conn=conn)
             if account_link is None:
                 result["skipped"].append({"remoteId": remote_id, "reason": "unknown account — pull accounts first"})
                 continue
@@ -406,7 +418,7 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
             category_remote_id = mapping.record_category_id(record)
             category_id = None
             if category_remote_id and not mapping.is_restricted_category(category_remote_id):
-                category_link = repo.get_link_by_remote(ENTITY_CATEGORY, category_remote_id)
+                category_link = repo.get_link_by_remote(ENTITY_CATEGORY, category_remote_id, conn=conn)
                 category_id = category_link["local_id"] if category_link else None
 
             try:
@@ -417,13 +429,13 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
 
             label_ids = [
                 l["local_id"] for l in (
-                    repo.get_link_by_remote(ENTITY_LABEL, rlid) for rlid in mapping.record_label_ids(record)
+                    repo.get_link_by_remote(ENTITY_LABEL, rlid, conn=conn) for rlid in mapping.record_label_ids(record)
                 ) if l
             ]
 
-            link = repo.get_link_by_remote(ENTITY_RECORD, remote_id)
+            link = repo.get_link_by_remote(ENTITY_RECORD, remote_id, conn=conn)
             if link:
-                existing = repo.get_transaction(link["local_id"])
+                existing = repo.get_transaction(link["local_id"], conn=conn)
                 local_synced_at = link.get("local_synced_at")
                 local_edited_since_sync = (
                     existing and existing.get("updated_at") and local_synced_at
@@ -434,32 +446,38 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                     continue
                 if apply:
                     repo.update_transaction(
-                        link["local_id"], occurred_at=fields["occurred_at"], amount=fields["amount"],
+                        link["local_id"], conn=conn,
+                        occurred_at=fields["occurred_at"], amount=fields["amount"],
                         direction=fields["direction"], category_id=fields["category_id"], wallet_id=fields["wallet_id"],
                         note=fields["note"],
                     )
-                    repo.set_transaction_labels(link["local_id"], label_ids)
+                    repo.set_transaction_labels(link["local_id"], label_ids, conn=conn)
                     # local_synced_at captured AFTER update_transaction() (which
                     # always stamps its own updated_at) — must be >= that
                     # stamp, or this row would look "locally edited" and get
                     # selected for push next run, ping-ponging the same pulled
                     # data straight back to Wallet.
-                    repo.upsert_link(ENTITY_RECORD, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
+                    repo.upsert_link(ENTITY_RECORD, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull", conn=conn)
                 result["updated"] += 1
             else:
                 if apply:
-                    period_id = _period_id_for(fields["occurred_at"], payroll_day, conn)
-                    txn = repo.create_transaction(
+                    period_id = _period_id_for(fields["occurred_at"], payroll_day, conn, cache=period_cache)
+                    txn_id = repo.create_transaction(
                         amount=fields["amount"], direction=fields["direction"], category_id=fields["category_id"],
                         wallet_id=fields["wallet_id"], period_id=period_id, note=fields["note"],
-                        source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"],
+                        source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"], conn=conn,
                     )
-                    repo.set_transaction_labels(txn["id"], label_ids)
-                    repo.upsert_link(ENTITY_RECORD, txn["id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")
+                    if label_ids:
+                        repo.set_transaction_labels(txn_id, label_ids, conn=conn)
+                    repo.upsert_link(ENTITY_RECORD, txn_id, remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull", conn=conn)
                 result["created"] += 1
 
-        # Page fully applied. More to come -> persist offset + running max
-        # so a killed/timed-out run resumes here; stop if the budget's spent.
+        # Page fully applied. Commit the whole page as one transaction, then
+        # persist the resume point. A crash before the commit rolls the page
+        # back and the offset isn't advanced -> the next run re-pulls it
+        # (idempotent: links exist -> update path).
+        if apply:
+            conn.commit()
         if next_offset is not None:
             if apply:
                 _set_record_progress(next_offset, max_updated)

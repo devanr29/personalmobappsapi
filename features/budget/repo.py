@@ -852,11 +852,19 @@ def _txn_list_row(row):
 def create_transaction(
     amount, direction, category_id=None, wallet_id=None, transfer_wallet_id=None,
     period_id=None, bill_id=None, goal_id=None, note=None, source="manual",
-    raw_input=None, occurred_at=None,
+    raw_input=None, occurred_at=None, conn=None,
 ):
+    """Pass `conn` to batch: the INSERT runs on the caller's connection with
+    NO commit and NO re-fetch, and the return is the bare new id (int)
+    rather than the full row dict. The wallet-sync backfill applies ~30
+    records per HTTP page against a Postgres ~600ms round-trip away — one
+    shared transaction per page instead of INSERT+commit+SELECT per row is
+    the difference between ~350 round-trips per page and ~90."""
     occurred_at = occurred_at or now_jkt().strftime("%Y-%m-%d %H:%M")
     now = str(now_jkt())
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     cur = conn.execute(
         "INSERT INTO budget_transactions "
         "(occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id, "
@@ -866,16 +874,21 @@ def create_transaction(
          period_id, bill_id, goal_id, note, source, raw_input, now, now),
     )
     txn_id = cur.lastrowid
+    if not owns_conn:
+        return txn_id
     conn.commit()
     conn.close()
     return get_transaction(txn_id)
 
 
-def get_transaction(txn_id):
-    conn = db_conn()
+def get_transaction(txn_id, conn=None):
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     sql = "SELECT " + _TXN_COLS + " FROM budget_transactions WHERE id = ?"
     row = conn.execute(sql, (txn_id,)).fetchone()
-    conn.close()
+    if owns_conn:
+        conn.close()
     return _txn_row(row) if row else None
 
 
@@ -947,9 +960,11 @@ _TXN_UPDATABLE = {
 }
 
 
-def update_transaction(txn_id, **fields):
+def update_transaction(txn_id, conn=None, **fields):
+    """Pass `conn` to batch (see create_transaction): runs on the caller's
+    connection, no commit, no re-fetch, returns None."""
     if not fields:
-        return get_transaction(txn_id)
+        return None if conn is not None else get_transaction(txn_id)
     sets, params = [], []
     for key, value in fields.items():
         if key not in _TXN_UPDATABLE:
@@ -957,7 +972,7 @@ def update_transaction(txn_id, **fields):
         sets.append(key + " = ?")
         params.append(value)
     if not sets:
-        return get_transaction(txn_id)
+        return None if conn is not None else get_transaction(txn_id)
     # updated_at drives the Wallet sync push side (features/budget/wallet/):
     # a row with no link row, or with updated_at newer than the link's
     # local_synced_at, is what "changed locally since last sync" means.
@@ -965,9 +980,13 @@ def update_transaction(txn_id, **fields):
     sets.append("updated_at = ?")
     params.append(str(now_jkt()))
     params.append(txn_id)
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     sql = "UPDATE budget_transactions SET " + ", ".join(sets) + " WHERE id = ?"
     conn.execute(sql, params)
+    if not owns_conn:
+        return None
     conn.commit()
     conn.close()
     return get_transaction(txn_id)
@@ -1268,19 +1287,25 @@ def get_transaction_label_ids(transaction_id, conn=None):
     return [r[0] for r in rows]
 
 
-def set_transaction_labels(transaction_id, label_ids):
+def set_transaction_labels(transaction_id, label_ids, conn=None):
     """Replaces the full label set for a transaction — mirrors Wallet's
     own PATCH .../labelIds semantics (array = replace-all), so the pull
-    side can apply a remote record's labelIds directly without diffing."""
-    conn = db_conn()
+    side can apply a remote record's labelIds directly without diffing.
+
+    Pass `conn` to batch (see create_transaction): runs on the caller's
+    connection with no commit/close."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     conn.execute("DELETE FROM budget_transaction_labels WHERE transaction_id = ?", (transaction_id,))
     for label_id in label_ids:
         conn.execute(
             "INSERT INTO budget_transaction_labels (transaction_id, label_id) VALUES (?, ?)",
             (transaction_id, label_id),
         )
-    conn.commit()
-    conn.close()
+    if owns_conn:
+        conn.commit()
+        conn.close()
 
 
 # ================================================================
@@ -1341,14 +1366,20 @@ def list_links(entity_type, conn=None) -> dict:
     return {r[3]: _link_row(r) for r in rows}
 
 
-def upsert_link(entity_type, local_id, remote_id, remote_updated_at=None, local_synced_at=None, last_direction=None):
+def upsert_link(entity_type, local_id, remote_id, remote_updated_at=None, local_synced_at=None,
+                last_direction=None, conn=None):
     """Insert-or-update on the (entity_type, local_id) identity — a local
     row links to at most one remote row and vice versa (both are UNIQUE
     in the schema), so 'the same local row synced again' must update the
-    existing link in place, never create a second one."""
+    existing link in place, never create a second one.
+
+    Pass `conn` to batch (see create_transaction): runs on the caller's
+    connection, no commit/close, returns None instead of re-fetching the row."""
     from db import IS_PG
 
-    conn = db_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
     if IS_PG:
         conn.execute(
             "INSERT INTO budget_wallet_links "
@@ -1368,6 +1399,8 @@ def upsert_link(entity_type, local_id, remote_id, remote_updated_at=None, local_
             "  ?, ?, ?, ?, ?, ?)",
             (entity_type, local_id, entity_type, local_id, remote_id, remote_updated_at, local_synced_at, last_direction),
         )
+    if not owns_conn:
+        return None
     conn.commit()
     conn.close()
     return get_link_by_local(entity_type, local_id)
