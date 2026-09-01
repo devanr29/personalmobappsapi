@@ -250,8 +250,34 @@ def _migration_3():
     ]
 
 
+def _migration_4():
+    """Adds a read-only cache of Wallet by BudgetBakers category NAMES,
+    used only as a *display* fallback on transactions whose category_id is
+    NULL — never as a real budget category. This is NOT the category pull
+    that was removed on 2026-08-31 (see features/budget/wallet/sync.py's
+    module docstring for why): that pulled the full taxonomy in as
+    budget_categories rows and produced ~85 inert categories plus
+    resurrected deleted bills/goals. This table has no monthly_limit,
+    kind, rollover, bills or goals — nothing joins on it except a
+    transaction list's display label, so it cannot affect budget math even
+    by accident."""
+    def _add_txn_wallet_category(conn):
+        _add_column_if_missing(conn, "budget_transactions", "wallet_category_remote_id", "TEXT")
+
+    return [
+        _add_txn_wallet_category,
+        f"""
+        CREATE TABLE IF NOT EXISTS budget_wallet_category_names (
+            remote_id  TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+    ]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
-MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3()]
+MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4()]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 

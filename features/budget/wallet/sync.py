@@ -11,23 +11,37 @@ a GET. (Removed 2026-08-31; `git log -- features/budget/wallet/` has the
 two-way version if it is ever wanted back.)
 
 Pull scope is narrow on purpose - accounts and records only, i.e. *money
-status*: what each account holds and what moved through it.
+status*: what each account holds and what moved through it. Category
+NAMES are also pulled, but only into a read-only display cache — see
+below, this is not the category pull that was removed.
 
-    accounts -> budget_wallets       pulled
-    records  -> budget_transactions  pulled
-    categories / labels / goals / standing-orders   NOT pulled
+    accounts        -> budget_wallets                 pulled
+    records         -> budget_transactions             pulled
+    category names  -> budget_wallet_category_names    pulled (cache only)
+    categories (as budget structure) / labels / goals / standing-orders   NOT pulled
 
-Wallet's categories, labels, goals and standing-orders are not pulled
-because the budget structure they created here is configured by hand in the
-app instead (a budget_categories row with a monthly_limit, budget_bills,
-budget_goals). Pulling them produced ~85 inert taxonomy categories that
-contributed nothing to the budget math, and re-created bills and goals that
-had been deliberately deleted.
+Wallet's categories are not pulled as budget structure — the budget itself
+(budget_categories rows with a monthly_limit, budget_bills, budget_goals)
+is configured by hand in the app instead. Pulling the full category
+taxonomy in as budget_categories rows produced ~85 inert categories that
+contributed nothing to the budget math, and re-created bills and goals
+that had been deliberately deleted; labels/goals/standing-orders were
+removed for the same reason.
 
-Records still resolve a category through the category links earlier pulls
-left behind (budget_wallet_links entity_type='category'), so a record whose
-Wallet category is already linked still arrives pre-filed. One under an
-unlinked category just gets category_id = NULL and is filed by hand.
+What IS pulled now (added after that removal): a flat id->name cache,
+budget_wallet_category_names, refreshed from Wallet's full category list
+on every non-backfill-resume pull. It cannot affect budget math — it has
+no monthly_limit/kind/bills/rollover, and nothing joins on it except a
+transaction list's display label (features/budget/repo.py's
+_TXN_LIST_SQL). Records still resolve category_id through the category
+links earlier pulls left behind (budget_wallet_links entity_type=
+'category'), so a record whose Wallet category is already linked still
+arrives pre-filed with a real local category_id. One under an unlinked
+category still gets category_id = NULL as before (filed by hand, or via
+"Attach an existing transaction") but now also carries its raw Wallet
+category id (wallet_category_remote_id), so the transaction list can show
+the real Wallet category name instead of blank — a label only, never a
+filed category.
 
 CONFLICT POLICY: Wallet wins on money. occurred_at, amount, direction,
 wallet_id and note are overwritten from Wallet on every pull. Wallet never
@@ -249,6 +263,33 @@ def _pull_accounts(client, cursor, apply=True) -> dict:
     return result
 
 
+def _pull_category_names(client, apply=True) -> dict:
+    """Refreshes budget_wallet_category_names, the read-only id->name
+    display cache, from Wallet's full category list (~85 rows, one page —
+    small enough that a plain full refresh each run is simpler than a
+    cursor, and categories change rarely enough that re-fetching is cheap
+    against the 60/hour rate limit). This is NOT the category-as-budget-
+    structure pull that was removed 2026-08-31 (see module docstring) — no
+    budget_categories row is created or touched, only this cache table.
+
+    Always reports every row as "updated" (create/update is not a
+    meaningful distinction for a pure name cache)."""
+    result = {"created": 0, "updated": 0, "skipped": []}
+    conn = db_conn() if apply else None
+    try:
+        for category in client.paginate("/v1/api/categories"):
+            fields = mapping.category_to_name_fields(category)
+            if apply:
+                repo.upsert_wallet_category_name(fields["remote_id"], fields["name"], conn=conn)
+            result["updated"] += 1
+        if apply:
+            conn.commit()
+    finally:
+        if conn is not None:
+            conn.close()
+    return result
+
+
 _RECORD_DATE_FLOOR = "2000-01-01T00:00:00.000Z"
 
 
@@ -311,7 +352,10 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                 category_id = category_link["local_id"] if category_link else None
 
             try:
-                fields = mapping.record_to_transaction_fields(record, category_id=category_id, wallet_id=account_link["local_id"])
+                fields = mapping.record_to_transaction_fields(
+                    record, category_id=category_id, category_remote_id=category_remote_id,
+                    wallet_id=account_link["local_id"],
+                )
             except ValueError as e:
                 result["skipped"].append({"remoteId": remote_id, "reason": str(e)})
                 continue
@@ -322,14 +366,17 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                     # Wallet wins on money — but category_id and bill_id are
                     # deliberately absent from this call. Those are local
                     # budget decisions (filed by hand, or via "Attach an
-                    # existing transaction"), and since categories are no
-                    # longer pulled, re-sending the resolved value would
-                    # blank them on every single sync.
+                    # existing transaction"), and re-sending the resolved
+                    # value would blank them on every single sync.
+                    # wallet_category_remote_id IS included: it's display-
+                    # only (see _TXN_LIST_SQL), so refreshing it can't undo
+                    # a local filing decision the way overwriting category_id
+                    # would.
                     repo.update_transaction(
                         link["local_id"], conn=conn,
                         occurred_at=fields["occurred_at"], amount=fields["amount"],
                         direction=fields["direction"], wallet_id=fields["wallet_id"],
-                        note=fields["note"],
+                        note=fields["note"], wallet_category_remote_id=fields["wallet_category_remote_id"],
                     )
                     repo.upsert_link(ENTITY_RECORD, link["local_id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull", conn=conn)
                 result["updated"] += 1
@@ -339,7 +386,8 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                     txn_id = repo.create_transaction(
                         amount=fields["amount"], direction=fields["direction"], category_id=fields["category_id"],
                         wallet_id=fields["wallet_id"], period_id=period_id, note=fields["note"],
-                        source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"], conn=conn,
+                        source="wallet", raw_input=remote_id, occurred_at=fields["occurred_at"],
+                        wallet_category_remote_id=fields["wallet_category_remote_id"], conn=conn,
                     )
                     repo.upsert_link(ENTITY_RECORD, txn_id, remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull", conn=conn)
                 result["created"] += 1
@@ -391,7 +439,9 @@ def pull_all(apply=True, max_seconds=None) -> dict:
     # cursor is set), and re-walking them every /pull round adds seconds
     # against a far-region DB for near-zero new rows. Skip straight to
     # records until the history is in; the next sync picks up anything
-    # added since.
+    # added since. Category names ride along with accounts here for the
+    # same reason — both are small, bounded pulls worth skipping mid-
+    # backfill, unlike the unbounded records pull below.
     resuming_backfill = apply and _get_record_progress()[0] > 0
 
     conn = db_conn()
@@ -399,6 +449,8 @@ def pull_all(apply=True, max_seconds=None) -> dict:
         summary = {
             "accounts": _empty_pull_result() if resuming_backfill
             else _pull_accounts(client, cursors.get(ENTITY_ACCOUNT), apply=apply),
+            "categoryNames": _empty_pull_result() if resuming_backfill
+            else _pull_category_names(client, apply=apply),
         }
         summary["records"] = _pull_records(
             client, cursors.get(ENTITY_RECORD), get_payroll_day(), conn, apply=apply, deadline=deadline

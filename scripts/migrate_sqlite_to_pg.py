@@ -80,6 +80,7 @@ TABLES = [
         "id", "occurred_at", "amount", "direction", "category_id", "wallet_id",
         "transfer_wallet_id", "period_id", "bill_id", "goal_id", "note",
         "source", "raw_input", "created_at", "deleted_at", "updated_at",
+        "wallet_category_remote_id",
     ], None),
     ("budget_bill_payments", [
         "id", "bill_id", "period_id", "transaction_id", "paid_at",
@@ -103,6 +104,9 @@ TABLES = [
         "id", "entity_type", "local_id", "remote_id",
         "remote_updated_at", "local_synced_at", "last_direction",
     ], None),
+    # Added by schema.py migration 4 — read-only display-name cache, keyed
+    # on remote_id (no "id"/"key" column; see _pk_column()).
+    ("budget_wallet_category_names", ["remote_id", "name", "updated_at"], None),
 ]
 
 # (table -> composite PK columns) for the one junction table with no
@@ -123,7 +127,11 @@ SERIAL_TABLES = [
 
 
 def _pk_column(columns: list[str]) -> str:
-    return "key" if "key" in columns else "id"
+    if "key" in columns:
+        return "key"
+    if "id" in columns:
+        return "id"
+    return "remote_id"  # budget_wallet_category_names — no id/key column
 
 
 def _select_sql(table: str, columns: list[str]) -> str:

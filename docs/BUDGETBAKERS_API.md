@@ -239,7 +239,7 @@ reference the given IDs before you attempt a delete.
 |---|---|---|
 | `records` (UUID) | `budget_transactions` (int PK) | sign→`direction`, `convertedAmount.value`(→IDR)→int `amount`, `recordDate`↔`occurred_at`, transfer pair↔single row+`transfer_wallet_id` |
 | `accounts` | `budget_wallets` | `accountType`↔`kind`, `initialBalance`↔`opening_balance` |
-| `categories` (system+custom) | `budget_categories` | `cardinality`↔`kind` (`must/need`→`fixed`, `want`→`variable`), custom creation needs `parentId` |
+| `categories` (system+custom) | `budget_wallet_category_names` (display cache only) | id→name only, refreshed every pull; **not** `budget_categories` — that pull (with `cardinality`↔`kind`) was removed 2026-08-31 for creating ~85 inert categories (see `features/budget/wallet/sync.py`'s module docstring) |
 | `labels` | `budget_labels` (new) | flat, no equivalent existed locally before this integration |
 | `goals` | `budget_goals` | pull-only; `state active/paused/reached`→`archived` |
 | `standing-orders`+`/items` | `budget_bills`+`budget_bill_payments` | pull-only; RRULE→`cadence`+`due_day` |

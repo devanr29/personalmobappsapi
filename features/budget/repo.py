@@ -823,12 +823,26 @@ _TXN_COLS_LIST = [c.strip() for c in _TXN_COLS.split(",")]
 # Joined variant for list queries: pulls category/wallet names in the same
 # query instead of camel_transaction() issuing 2 extra lookups per row
 # (each opening its own connection — 50 rows was 101 connections).
+#
+# COALESCE(c.name, wcn.name): c.name is the real local budget category (a
+# row the user configured with a monthly_limit); wcn.name is the read-only
+# Wallet-by-BudgetBakers display cache (budget_wallet_category_names) used
+# only when category_id is NULL, so a synced transaction with no local
+# category still shows its real Wallet category name instead of blank.
+# categoryId in the API response stays null either way — this only fills
+# in the label. Deliberately NOT applied to the insights/aggregate queries
+# below (spend_by_category_for_period, category rankings/patterns): those
+# group by category_id for budget math, and mixing in per-vendor Wallet
+# names there would fragment the "Uncategorized" bucket into noise — the
+# same failure mode that got the old category pull removed (see
+# features/budget/wallet/sync.py's module docstring).
 _TXN_LIST_SQL = (
     "SELECT " + ", ".join("t." + c for c in _TXN_COLS_LIST) + ", "
-    "c.name AS category_name, w.name AS wallet_name "
+    "COALESCE(c.name, wcn.name) AS category_name, w.name AS wallet_name "
     "FROM budget_transactions t "
     "LEFT JOIN budget_categories c ON c.id = t.category_id "
     "LEFT JOIN budget_wallets    w ON w.id = t.wallet_id "
+    "LEFT JOIN budget_wallet_category_names wcn ON wcn.remote_id = t.wallet_category_remote_id "
 )
 
 
@@ -852,14 +866,18 @@ def _txn_list_row(row):
 def create_transaction(
     amount, direction, category_id=None, wallet_id=None, transfer_wallet_id=None,
     period_id=None, bill_id=None, goal_id=None, note=None, source="manual",
-    raw_input=None, occurred_at=None, conn=None,
+    raw_input=None, occurred_at=None, wallet_category_remote_id=None, conn=None,
 ):
     """Pass `conn` to batch: the INSERT runs on the caller's connection with
     NO commit and NO re-fetch, and the return is the bare new id (int)
     rather than the full row dict. The wallet-sync backfill applies ~30
     records per HTTP page against a Postgres ~600ms round-trip away — one
     shared transaction per page instead of INSERT+commit+SELECT per row is
-    the difference between ~350 round-trips per page and ~90."""
+    the difference between ~350 round-trips per page and ~90.
+
+    wallet_category_remote_id is display-only (see _TXN_LIST_SQL) — the raw
+    Wallet category id, kept even when category_id is None so the
+    transaction list can still show its real Wallet category name."""
     occurred_at = occurred_at or now_jkt().strftime("%Y-%m-%d %H:%M")
     now = str(now_jkt())
     owns_conn = conn is None
@@ -868,10 +886,12 @@ def create_transaction(
     cur = conn.execute(
         "INSERT INTO budget_transactions "
         "(occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id, "
-        " period_id, bill_id, goal_id, note, source, raw_input, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " period_id, bill_id, goal_id, note, source, raw_input, created_at, updated_at, "
+        " wallet_category_remote_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (occurred_at, amount, direction, category_id, wallet_id, transfer_wallet_id,
-         period_id, bill_id, goal_id, note, source, raw_input, now, now),
+         period_id, bill_id, goal_id, note, source, raw_input, now, now,
+         wallet_category_remote_id),
     )
     txn_id = cur.lastrowid
     if not owns_conn:
@@ -957,6 +977,9 @@ def get_transactions(period_id=None, category_id=None, wallet_id=None, direction
 _TXN_UPDATABLE = {
     "occurred_at", "amount", "direction", "category_id", "wallet_id",
     "transfer_wallet_id", "period_id", "bill_id", "goal_id", "note",
+    # Display-only (see _TXN_LIST_SQL) — safe to overwrite on every sync
+    # unlike category_id, which local hand-filing must never be clobbered.
+    "wallet_category_remote_id",
 }
 
 
@@ -1404,6 +1427,35 @@ def upsert_link(entity_type, local_id, remote_id, remote_updated_at=None, local_
     conn.commit()
     conn.close()
     return get_link_by_local(entity_type, local_id)
+
+
+def upsert_wallet_category_name(remote_id, name, conn=None):
+    """Insert-or-update the read-only display cache (features/budget/
+    schema.py migration 4) keyed on Wallet's category id. Pass `conn` to
+    batch (see create_transaction) — runs on the caller's connection, no
+    commit, no re-fetch."""
+    from db import IS_PG
+
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    now = str(now_jkt())
+    if IS_PG:
+        conn.execute(
+            "INSERT INTO budget_wallet_category_names (remote_id, name, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT (remote_id) DO UPDATE SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at",
+            (remote_id, name, now),
+        )
+    else:
+        conn.execute(
+            "INSERT OR REPLACE INTO budget_wallet_category_names (remote_id, name, updated_at) "
+            "VALUES (?, ?, ?)",
+            (remote_id, name, now),
+        )
+    if owns_conn:
+        conn.commit()
+        conn.close()
 
 
 def delete_link(entity_type, local_id):

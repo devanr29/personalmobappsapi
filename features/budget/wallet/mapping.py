@@ -22,11 +22,13 @@ unset since Transfer is a restricted system category) — every wallet's
 balance still ends up correct, it just shows as two rows instead of one
 elegant transfer.
 
-Pull-only. Only accounts and records are synced now, so this module holds
-only the Wallet->local direction for those two (see sync.py's module
-docstring). The local->Wallet payload builders and the category / label /
-goal / standing-order converters were removed with the push direction on
-2026-08-31; `git log -- features/budget/wallet/` has them.
+Pull-only. Accounts and records are synced as real local rows; category
+NAMES are also pulled into a read-only display cache (category_to_name_
+fields() below — see sync.py's module docstring) but never as
+budget_categories rows. The local->Wallet payload builders and the former
+category-as-budget-structure / label / goal / standing-order converters
+were removed with the push direction on 2026-08-31; `git log --
+features/budget/wallet/` has them.
 
 Restricted system category UUIDs, from docs/BUDGETBAKERS_API.md:"""
 WALLET_DEBT_CATEGORY_ID = "5c5c4e20-00c8-8000-8000-000000000000"
@@ -142,10 +144,16 @@ def record_category_id(record: dict):
     return _embed_id(record.get("category"))
 
 
-def record_to_transaction_fields(record: dict, *, category_id=None, wallet_id=None, transfer_wallet_id=None) -> dict:
+def record_to_transaction_fields(
+    record: dict, *, category_id=None, category_remote_id=None, wallet_id=None, transfer_wallet_id=None,
+) -> dict:
     """category_id/wallet_id/transfer_wallet_id are LOCAL ids, already
     resolved by sync.py from the remote UUIDs via budget_wallet_links —
-    this function does no lookups of its own."""
+    this function does no lookups of its own. category_remote_id is passed
+    through unresolved as wallet_category_remote_id (display-only, see
+    features/budget/repo.py's _TXN_LIST_SQL) regardless of whether it
+    resolved to a local category_id or is a restricted system category —
+    either way it's just a label, never budget structure."""
     direction = "transfer" if transfer_wallet_id is not None else record_direction(record)
     amount = abs(record_amount_idr(record))
     return {
@@ -153,9 +161,21 @@ def record_to_transaction_fields(record: dict, *, category_id=None, wallet_id=No
         "amount": amount,
         "direction": direction,
         "category_id": category_id,
+        "wallet_category_remote_id": category_remote_id,
         "wallet_id": wallet_id,
         "transfer_wallet_id": transfer_wallet_id,
         "note": record.get("note"),
         "source": "wallet",
         "raw_input": record.get("id"),
     }
+
+
+# ================================================================
+# CATEGORIES -> DISPLAY-NAME CACHE (read-only, see sync.py's module
+# docstring — NOT the category-as-budget-structure pull removed 2026-08-31)
+# ================================================================
+def category_to_name_fields(category: dict) -> dict:
+    """Wallet's /v1/api/categories list -> the two columns
+    budget_wallet_category_names actually has. No kind/monthly_limit/icon —
+    this cache cannot become a budget_categories row by accident."""
+    return {"remote_id": category["id"], "name": category.get("name") or "Unnamed category"}

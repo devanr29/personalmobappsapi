@@ -43,10 +43,11 @@ def test_sync_preview_returns_a_pull_summary_and_no_push_half(client, auth_heade
     resp = client.post("/api/budget/sync/wallet/preview", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.get_json()["data"]
-    # Accounts and records only — categories/labels/goals/bills are no
-    # longer pulled, and there is no push direction at all.
+    # Accounts, records, and the read-only category-name display cache —
+    # categories-as-budget-structure/labels/goals/bills are no longer
+    # pulled, and there is no push direction at all.
     assert set(body.keys()) == {"pull"}
-    assert set(body["pull"].keys()) == {"accounts", "records"}
+    assert set(body["pull"].keys()) == {"accounts", "records", "categoryNames"}
 
 
 def test_sync_pull_route_returns_summary_and_free_money(client, auth_headers, monkeypatch):
