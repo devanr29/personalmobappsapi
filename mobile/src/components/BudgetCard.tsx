@@ -5,7 +5,7 @@ import { Card } from "./Card";
 import { Meter, clamp01 } from "@/components/charts";
 import type { BudgetSnapshot } from "@/api/types";
 import { PressableScale } from "@/theme/motion";
-import { HStack, Stack, Text } from "@/theme/primitives";
+import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatRupiah } from "@/utils/currency";
 
@@ -22,7 +22,9 @@ export function BudgetCard({ data, onSetup }: BudgetCardProps) {
       <Card>
         <Stack gap={3}>
           <HStack align="center" gap={3}>
-            <Wallet size={18} color={theme.colors.accent} />
+            <Box radius="md" bg={theme.tile[2].bg} align="center" justify="center" style={{ width: 32, height: 32 }}>
+            <Wallet size={16} color={theme.tile[2].fg} />
+          </Box>
             <Text variant="label" tone="secondary" style={{ flex: 1 }}>
               Daily budget
             </Text>
@@ -48,7 +50,9 @@ export function BudgetCard({ data, onSetup }: BudgetCardProps) {
     <Card>
       <Stack gap={3}>
         <HStack align="center" gap={3}>
-          <Wallet size={18} color={theme.colors.accent} />
+          <Box radius="md" bg={theme.tile[2].bg} align="center" justify="center" style={{ width: 32, height: 32 }}>
+            <Wallet size={16} color={theme.tile[2].fg} />
+          </Box>
           <Text variant="label" tone="secondary" style={{ flex: 1 }}>
             Daily budget
           </Text>

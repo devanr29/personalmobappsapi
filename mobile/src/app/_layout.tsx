@@ -1,5 +1,6 @@
-import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -11,9 +12,9 @@ import { useAppFonts } from '@/theme/fonts';
 
 SplashScreen.preventAutoHideAsync();
 
-// Nocturne is dark-only — no light-mode nav theme to switch to. The native
-// splash background (app.json) is the Nocturne ground, so there is no
-// off-brand flash between the OS splash and this screen.
+// The native splash background (app.json) is the dark Nocturne ground, so
+// there's no off-brand flash between the OS splash and this screen even
+// though the resolved mode (light/dark) isn't known until settings load.
 export default function RootLayout() {
   const [fontsLoaded] = useAppFonts();
 
@@ -27,13 +28,11 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider value={DarkTheme}>
-        <SettingsProvider>
-          <BudgetProvider>
-            <ThemedApp />
-          </BudgetProvider>
-        </SettingsProvider>
-      </ThemeProvider>
+      <SettingsProvider>
+        <BudgetProvider>
+          <ThemedApp />
+        </BudgetProvider>
+      </SettingsProvider>
     </GestureHandlerRootView>
   );
 }
@@ -48,17 +47,24 @@ function ThemedApp() {
   }, [loaded]);
 
   // Fonts are already guaranteed ready (RootLayout gates on them); wait for
-  // persisted theme config too, so the accent/ground/corner never flashes
-  // default-then-saved on a cold start.
+  // persisted theme config too, so the mode/accent/ground/corner never
+  // flashes default-then-saved on a cold start.
   if (!loaded) {
     return null;
   }
 
   return (
     <AppThemeProvider config={themeConfig}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
-      </Stack>
+      <ThemeProvider value={themeConfig.mode === "dark" ? DarkTheme : DefaultTheme}>
+        {/* Status bar icon color follows the in-app mode toggle, not the OS
+            setting (userInterfaceStyle: "automatic" in app.json) — otherwise
+            picking Light while the phone is in system dark mode renders
+            white status-bar icons on a white background. */}
+        <StatusBar style={themeConfig.mode === "dark" ? "light" : "dark"} />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(tabs)" />
+        </Stack>
+      </ThemeProvider>
     </AppThemeProvider>
   );
 }

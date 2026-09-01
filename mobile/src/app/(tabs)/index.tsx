@@ -120,6 +120,7 @@ export default function HomeScreen() {
                   IconComponent={CheckSquare}
                   value={String(activeTaskCount)}
                   label="Active tasks"
+                  tileIndex={1}
                   trend={totalTaskCount > 0 ? <Meter value={completedRatio} /> : undefined}
                 />
                 <StatCard
@@ -128,6 +129,7 @@ export default function HomeScreen() {
                   valueVariant="heading"
                   valueTone="secondary"
                   label={data.nextEvent ? data.nextEvent.title : "No upcoming events"}
+                  tileIndex={4}
                 />
               </HStack>
 
@@ -166,10 +168,10 @@ export default function HomeScreen() {
               <QuoteCard quote={data.quoteOfDay.quote} author={data.quoteOfDay.author} />
 
               <HStack gap={3}>
-                <ShortcutTile IconComponent={Note} label="Notes" onPress={() => router.push("/notes")} />
-                <ShortcutTile IconComponent={Lightbulb} label="Ideas" onPress={() => router.push("/ideas")} />
-                <ShortcutTile IconComponent={Newspaper} label="News" onPress={() => router.push("/news")} />
-                <ShortcutTile IconComponent={Brain} label="Brainstorm" onPress={() => router.push("/brainstorm")} />
+                <ShortcutTile IconComponent={Note} label="Notes" tileIndex={0} onPress={() => router.push("/notes")} />
+                <ShortcutTile IconComponent={Lightbulb} label="Ideas" tileIndex={1} onPress={() => router.push("/ideas")} />
+                <ShortcutTile IconComponent={Newspaper} label="News" tileIndex={2} onPress={() => router.push("/news")} />
+                <ShortcutTile IconComponent={Brain} label="Brainstorm" tileIndex={3} onPress={() => router.push("/brainstorm")} />
               </HStack>
             </ScrollView>
           );

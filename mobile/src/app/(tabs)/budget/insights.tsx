@@ -309,6 +309,7 @@ function StatsRow({ data }: { data: BudgetInsights }) {
           IconComponent={Coins}
           value={formatRupiah(data.stats.spendToDate)}
           label="Spent to date"
+          tileIndex={2}
           trend={<Sparkline data={data.stats.spendSparkline} width={64} height={24} />}
         />
         <StatCard
@@ -316,14 +317,16 @@ function StatsRow({ data }: { data: BudgetInsights }) {
           value={formatRupiah(data.stats.avgDailySpend)}
           valueTone={data.stats.burnRateVsIdeal <= 0 ? "positive" : "negative"}
           label="Avg daily spend"
+          tileIndex={data.stats.burnRateVsIdeal <= 0 ? 2 : 3}
         />
       </HStack>
       <HStack gap={3}>
-        <StatCard IconComponent={Target} value={formatRupiah(data.stats.projectedEndBalance)} label="Projected at payday" />
+        <StatCard IconComponent={Target} value={formatRupiah(data.stats.projectedEndBalance)} label="Projected at payday" tileIndex={1} />
         <StatCard
           IconComponent={Receipt}
           value={data.stats.largestExpense ? formatRupiah(data.stats.largestExpense.amount) : "—"}
           label={data.stats.largestExpense ? data.stats.largestExpense.name : "Largest expense"}
+          tileIndex={4}
         />
       </HStack>
     </Stack>

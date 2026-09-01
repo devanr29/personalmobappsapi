@@ -11,10 +11,12 @@ import { PressableScale } from "@/theme/motion";
 import { HStack, Stack, Text } from "@/theme/primitives";
 import { useSettings } from "@/theme/SettingsProvider";
 import { useTheme } from "@/theme/ThemeProvider";
+import { type ThemeMode } from "@/theme/ThemeProvider";
 import { accentOptions, cornerPresets, groundPresets, type CornerPresetName, type GroundPresetName } from "@/theme/tokens";
 
 const GROUND_OPTIONS: GroundPresetName[] = ["Midnight", "Deep indigo", "Slate"];
 const CORNER_OPTIONS: CornerPresetName[] = ["Rounded", "Crisp"];
+const MODE_OPTIONS: ThemeMode[] = ["light", "dark"];
 
 export default function SettingsScreen() {
   const theme = useTheme();
@@ -45,6 +47,39 @@ export default function SettingsScreen() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={["top"]}>
       <ScreenHeader title="Settings" />
       <ScrollView contentContainerStyle={{ padding: theme.spacing[4], gap: theme.spacing[4] }}>
+        <Card>
+          <Stack gap={3}>
+            <Text variant="label" tone="secondary">
+              Theme
+            </Text>
+            <HStack bg={theme.colors.bg} radius="pill" p={1}>
+              {MODE_OPTIONS.map((m) => {
+                const selected = themeConfig.mode === m;
+                return (
+                  <PressableScale
+                    key={m}
+                    onPress={() => setThemeConfig({ ...themeConfig, mode: m })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${m === "light" ? "Light" : "Dark"} theme`}
+                    style={{ flex: 1 }}
+                  >
+                    <Stack
+                      py={2}
+                      radius="pill"
+                      align="center"
+                      bg={selected ? theme.colors.accent : "transparent"}
+                    >
+                      <Text variant="label" style={{ color: selected ? theme.colors.bg : theme.colors.neutral[500], fontFamily: theme.fontFamily.semiBold }}>
+                        {m === "light" ? "Light" : "Dark"}
+                      </Text>
+                    </Stack>
+                  </PressableScale>
+                );
+              })}
+            </HStack>
+          </Stack>
+        </Card>
+
         <Card>
           <Stack gap={2}>
             <Text variant="label" tone="secondary">
@@ -99,6 +134,7 @@ export default function SettingsScreen() {
           </Stack>
         </Card>
 
+        {themeConfig.mode === "dark" ? (
         <Card>
           <Stack gap={3}>
             <Text variant="label" tone="secondary">
@@ -140,6 +176,7 @@ export default function SettingsScreen() {
             </HStack>
           </Stack>
         </Card>
+        ) : null}
 
         <Card>
           <Stack gap={3}>

@@ -12,6 +12,7 @@ const THEME_CONFIG_KEY = "nocturne.themeConfig";
 const USER_NAME_KEY = "nocturne.userName";
 
 const DEFAULT_THEME_CONFIG: ThemeConfig = {
+  mode: "dark",
   accent: colors.defaultAccent,
   groundPreset: "Midnight",
   cornerPreset: "Rounded",
@@ -47,7 +48,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
           AsyncStorage.getItem(THEME_CONFIG_KEY),
           AsyncStorage.getItem(USER_NAME_KEY),
         ]);
-        if (storedConfig) setThemeConfigState(JSON.parse(storedConfig));
+        // A config saved before v3 (real light mode) has no `mode` field —
+        // default it to "dark" explicitly so an upgrade never silently
+        // flips an existing dark-only user into light mode.
+        if (storedConfig) setThemeConfigState({ mode: "dark", ...JSON.parse(storedConfig) });
         if (storedName) setUserNameState(storedName);
       } catch {
         // Corrupt or unavailable storage — fall back to defaults silently;

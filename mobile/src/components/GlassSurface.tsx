@@ -32,9 +32,7 @@ export function GlassSurface({ children, style, glassStyle = "regular", tinted, 
       glassEffectStyle={glassStyle}
       tintColor={tinted ? theme.colors.accent : undefined}
       isInteractive={interactive}
-      // Nocturne has no light mode — always request the dark glass
-      // appearance regardless of system setting.
-      colorScheme="dark"
+      colorScheme={theme.mode}
       style={[{ backgroundColor: theme.glassFallback }, style]}
     >
       {children}
