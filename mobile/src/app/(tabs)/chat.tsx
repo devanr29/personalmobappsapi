@@ -1,4 +1,4 @@
-import { Sparkle } from "phosphor-react-native";
+import { Alarm, Newspaper, Plus, Sparkle, Wallet } from "phosphor-react-native";
 import { useRef } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,10 +13,10 @@ import { HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 
 const QUICK_CHIPS = [
-  { label: "＋ Task", message: "add task " },
-  { label: "⏰ Reminder", message: "remind me to " },
-  { label: "💰 Budget", message: "budget" },
-  { label: "📰 News", message: "news" },
+  { label: "Task", message: "add task ", IconComponent: Plus },
+  { label: "Reminder", message: "remind me to ", IconComponent: Alarm },
+  { label: "Budget", message: "budget", IconComponent: Wallet },
+  { label: "News", message: "news", IconComponent: Newspaper },
 ];
 
 export default function ChatScreen() {

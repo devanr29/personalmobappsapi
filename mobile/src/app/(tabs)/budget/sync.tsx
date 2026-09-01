@@ -78,20 +78,29 @@ export default function BudgetWalletSyncScreen() {
               <Card>
                 <Stack gap={3}>
                   <Text variant="heading">Actions</Text>
-                  <ActionRow
-                    IconComponent={Eye}
-                    label="Preview"
-                    description="See what would change — nothing is written."
-                    busy={busy === "preview"}
-                    onPress={() => runAction("preview", () => previewWalletSync())}
-                  />
-                  <ActionRow
-                    IconComponent={ArrowClockwise}
-                    label="Sync"
-                    description="Bring balances and transactions in from Wallet."
-                    busy={busy === "sync"}
-                    onPress={() => runAction("sync", () => pullWalletSync().then((r) => ({ pull: r.pull })))}
-                  />
+                  <HStack gap={2}>
+                    <ActionButton
+                      IconComponent={Eye}
+                      label={busy === "preview" ? "Previewing…" : "Preview"}
+                      busy={busy === "preview"}
+                      onPress={() => runAction("preview", () => previewWalletSync())}
+                    />
+                    <ActionButton
+                      IconComponent={ArrowClockwise}
+                      label={busy === "sync" ? "Syncing…" : "Sync"}
+                      busy={busy === "sync"}
+                      primary
+                      onPress={() => runAction("sync", () => pullWalletSync().then((r) => ({ pull: r.pull })))}
+                    />
+                  </HStack>
+                  <Stack gap={0.5}>
+                    <Text variant="caption" tone="faint">
+                      Preview — see what would change, nothing is written.
+                    </Text>
+                    <Text variant="caption" tone="faint">
+                      Sync — bring balances and transactions in from Wallet.
+                    </Text>
+                  </Stack>
                 </Stack>
               </Card>
 
@@ -136,9 +145,17 @@ function StatusCard({ data }: { data: WalletSyncStatus }) {
           <Text variant="label" tone="secondary">
             Token expires
           </Text>
-          <Text variant="meta" style={expiresSoon ? { color: theme.status.short } : undefined}>
-            {data.tokenExpiresAt ? new Date(data.tokenExpiresAt).toLocaleDateString() : "unknown"}
-          </Text>
+          {expiresSoon ? (
+            <Box py={0.5} px={1.5} radius="pill" bg={`${theme.status.short}26`}>
+              <Text variant="meta" style={{ color: theme.status.short }}>
+                {data.tokenExpiresAt ? new Date(data.tokenExpiresAt).toLocaleDateString() : "unknown"}
+              </Text>
+            </Box>
+          ) : (
+            <Text variant="meta">
+              {data.tokenExpiresAt ? new Date(data.tokenExpiresAt).toLocaleDateString() : "unknown"}
+            </Text>
+          )}
         </HStack>
         <HStack justify="space-between">
           <Text variant="label" tone="secondary">
@@ -172,33 +189,43 @@ function StatusCard({ data }: { data: WalletSyncStatus }) {
   );
 }
 
-function ActionRow({
+function ActionButton({
   IconComponent,
   label,
-  description,
   busy,
+  primary,
   onPress,
 }: {
   IconComponent: React.ComponentType<{ size: number; color: string }>;
   label: string;
-  description: string;
   busy: boolean;
+  primary?: boolean;
   onPress: () => void;
 }) {
   const theme = useTheme();
+  const fg = primary ? theme.colors.bg : theme.colors.accent;
   return (
-    <PressableScale onPress={busy ? undefined : onPress} accessibilityRole="button" accessibilityLabel={label}>
-      <Box py={3} px={3} radius="md" bg={theme.colors.bg} style={{ opacity: busy ? 0.5 : 1 }}>
-        <HStack align="center" gap={3}>
-          <IconComponent size={18} color={theme.colors.accent} />
-          <Stack flex={1} gap={0.5}>
-            <Text variant="label">{busy ? `${label}…` : label}</Text>
-            <Text variant="caption" tone="faint">
-              {description}
-            </Text>
-          </Stack>
-        </HStack>
-      </Box>
+    <PressableScale
+      onPress={busy ? undefined : onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={{ flex: 1 }}
+    >
+      <HStack
+        align="center"
+        justify="center"
+        gap={2}
+        py={3}
+        px={3}
+        radius="pill"
+        bg={primary ? theme.colors.accent : theme.colors.bg}
+        style={{ opacity: busy ? 0.5 : 1 }}
+      >
+        <IconComponent size={16} color={fg} />
+        <Text variant="label" style={{ color: fg }}>
+          {label}
+        </Text>
+      </HStack>
     </PressableScale>
   );
 }

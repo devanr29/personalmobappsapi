@@ -18,7 +18,7 @@ import { parseIdr } from "@/features/budget/utils/parseIdr";
 import { ApiError } from "@/api/client";
 import { useResource } from "@/hooks/useResource";
 import { PressableScale } from "@/theme/motion";
-import { HStack, Stack, Text } from "@/theme/primitives";
+import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatRupiah } from "@/utils/currency";
 
@@ -75,9 +75,11 @@ function GoalCard({ goal, onContribute }: { goal: Goal; onContribute: () => void
         <HStack align="center" justify="space-between">
           <Text variant="cardTitle">{goal.name}</Text>
           {isDone ? (
-            <Text variant="caption" tone="positive">
-              Reached
-            </Text>
+            <Box py={0.5} px={1.5} radius="pill" bg={`${theme.status.comfortable}26`}>
+              <Text variant="caption" tone="positive">
+                Reached
+              </Text>
+            </Box>
           ) : null}
         </HStack>
         <Meter value={progress} color={isDone ? theme.status.comfortable : theme.colors.accent} />

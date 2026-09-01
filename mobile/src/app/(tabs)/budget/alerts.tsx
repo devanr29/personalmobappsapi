@@ -1,15 +1,16 @@
 import { useCallback, useState } from "react";
-import { Bell, Gear } from "phosphor-react-native";
+import { ArrowsLeftRight, Bell, CalendarBlank, Gear, Warning, type Icon } from "phosphor-react-native";
 import { Pressable, ScrollView, Switch } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { IconBadge, type IconBadgeTone } from "@/components/IconBadge";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { Skeleton } from "@/components/Skeleton";
 import { getAlertPrefs, listAlerts, markAlertRead, updateAlertPrefs } from "@/features/budget/api";
-import type { Alert, AlertPrefs } from "@/features/budget/types";
+import type { Alert, AlertKind, AlertPrefs } from "@/features/budget/types";
 import { useResource } from "@/hooks/useResource";
 import { PressableScale } from "@/theme/motion";
 import { HStack, Stack, Text } from "@/theme/primitives";
@@ -112,19 +113,30 @@ function PrefRow({ label, value, onChange }: { label: string; value: boolean; on
   );
 }
 
+function alertIconFor(kind: AlertKind): { IconComponent: Icon; tone: IconBadgeTone } {
+  switch (kind) {
+    case "over_budget":
+    case "low_daily_budget":
+      return { IconComponent: Warning, tone: "negative" };
+    case "bill_due":
+      return { IconComponent: CalendarBlank, tone: "tight" };
+    case "period_rollover":
+      return { IconComponent: ArrowsLeftRight, tone: "accent" };
+    case "daily_checkin":
+    default:
+      return { IconComponent: Bell, tone: "accent" };
+  }
+}
+
 function AlertRow({ alert, onPress }: { alert: Alert; onPress: () => void }) {
-  const theme = useTheme();
   const isUnread = !alert.readAt;
+  const { IconComponent, tone } = alertIconFor(alert.kind);
 
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={alert.title}>
-      <Card>
+      <Card style={isUnread ? undefined : { opacity: 0.6 }}>
         <HStack gap={3} align="flex-start">
-          {isUnread ? (
-            <Stack mt={1.5} style={{ width: 8, height: 8, borderRadius: theme.radius.full, backgroundColor: theme.colors.accent }} />
-          ) : (
-            <Stack style={{ width: 8 }} />
-          )}
+          <IconBadge IconComponent={IconComponent} tone={tone} size={32} />
           <Stack flex={1} gap={0.5}>
             <Text variant="bodyStrong" tone={isUnread ? "primary" : "muted"}>
               {alert.title}

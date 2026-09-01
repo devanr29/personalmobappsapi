@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Receipt } from "phosphor-react-native";
+import { ArrowDownLeft, ArrowUpRight, Plus, Receipt } from "phosphor-react-native";
 import { ActivityIndicator, Pressable, ScrollView, SectionList } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -7,6 +7,7 @@ import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { FAB } from "@/components/FAB";
+import { IconBadge } from "@/components/IconBadge";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { Skeleton } from "@/components/Skeleton";
 import { SwipeableRow } from "@/components/SwipeableRow";
@@ -243,6 +244,11 @@ function TransactionRow({ txn }: { txn: Transaction }) {
 
   return (
     <HStack align="center" gap={3} py={3} px={4}>
+      <IconBadge
+        IconComponent={isExpense ? ArrowUpRight : ArrowDownLeft}
+        tone={isExpense ? "neutral" : "positive"}
+        size={32}
+      />
       <Stack flex={1} gap={0.5}>
         <Text variant="body">{txn.note || txn.categoryName || "Transaction"}</Text>
         <Text variant="caption" tone="faint">

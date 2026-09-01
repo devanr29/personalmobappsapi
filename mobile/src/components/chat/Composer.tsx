@@ -1,3 +1,4 @@
+import type { Icon } from "phosphor-react-native";
 import { Microphone, Paperclip, PaperPlaneRight } from "phosphor-react-native";
 import { ScrollView, TextInput } from "react-native";
 
@@ -11,7 +12,7 @@ export type ComposerProps = {
   value: string;
   onChangeText: (text: string) => void;
   onSend: () => void;
-  quickChips: { label: string; message: string }[];
+  quickChips: { label: string; message: string; IconComponent?: Icon }[];
   onQuickChip: (message: string) => void;
 };
 
@@ -24,7 +25,7 @@ export function Composer({ value, onChangeText, onSend, quickChips, onQuickChip 
       <Stack py={3} gap={3}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: theme.spacing[4], gap: theme.spacing[2] }}>
           {quickChips.map((chip) => (
-            <QuickChip key={chip.label} label={chip.label} onPress={() => onQuickChip(chip.message)} />
+            <QuickChip key={chip.label} label={chip.label} IconComponent={chip.IconComponent} onPress={() => onQuickChip(chip.message)} />
           ))}
         </ScrollView>
 

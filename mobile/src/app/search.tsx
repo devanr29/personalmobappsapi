@@ -11,11 +11,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { SearchBar } from "@/components/SearchBar";
 import { Skeleton } from "@/components/Skeleton";
-import { Tag } from "@/components/Tag";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { Meter, clamp01 } from "@/components/charts";
 import { AnimatedListItem } from "@/theme/motion";
-import { Stack, Text } from "@/theme/primitives";
+import { Box, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 
 export default function SearchScreen() {
@@ -60,17 +59,31 @@ export default function SearchScreen() {
         <EmptyState message="No matches found." IconComponent={MagnifyingGlass} />
       ) : (
         <ScrollView contentContainerStyle={{ padding: theme.spacing[4], paddingTop: theme.spacing[2], gap: theme.spacing[3] }}>
-          {results.map((result, index) => (
-            <AnimatedListItem key={index} index={index}>
-              <Card>
-                <Stack gap={2}>
-                  <Tag label={result.sourceType} variant="accent" />
-                  <Text variant="body">{result.content}</Text>
-                  <Meter value={clamp01(result.score)} />
-                </Stack>
-              </Card>
-            </AnimatedListItem>
-          ))}
+          {results.map((result, index) => {
+            const isIdea = result.sourceType === "idea";
+            const tagColor = isIdea ? theme.status.tight : theme.colors.neutral[400];
+            return (
+              <AnimatedListItem key={index} index={index}>
+                <Card>
+                  <Stack gap={2}>
+                    <Box
+                      py={0.5}
+                      px={1.5}
+                      radius="pill"
+                      bg={isIdea ? `${tagColor}26` : theme.colors.neutral[800]}
+                      style={{ alignSelf: "flex-start" }}
+                    >
+                      <Text variant="caption" style={{ color: tagColor }}>
+                        {result.sourceType}
+                      </Text>
+                    </Box>
+                    <Text variant="body">{result.content}</Text>
+                    <Meter value={clamp01(result.score)} />
+                  </Stack>
+                </Card>
+              </AnimatedListItem>
+            );
+          })}
         </ScrollView>
       )}
     </SafeAreaView>

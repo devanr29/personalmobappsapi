@@ -23,7 +23,7 @@ import { VariableCategoryCard } from "@/features/budget/components/VariableCateg
 import type { Bill, BudgetBreakdown, Category, TodayCard as TodayCardData, Wallet } from "@/features/budget/types";
 import { useResource } from "@/hooks/useResource";
 import { PressableScale } from "@/theme/motion";
-import { HStack, Stack, Text } from "@/theme/primitives";
+import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatRupiah } from "@/utils/currency";
 import type { BudgetSnapshot, BudgetStatusLevel } from "@/api/types";
@@ -410,23 +410,22 @@ function DailyBudgetHero({ summary }: { summary: BudgetSnapshot }) {
 function WalletStrip({ wallets }: { wallets: Wallet[] }) {
   const theme = useTheme();
   return (
-    <Card>
-      <Stack gap={3}>
-        <Text variant="heading">Wallets</Text>
-        <Stack gap={2}>
-          {wallets.map((w) => (
-            <HStack key={w.id} align="center" justify="space-between">
-              <Text variant="label" tone="secondary">
+    <HStack gap={2} wrap>
+      {wallets.map((w) => (
+        <Box key={w.id} flex={1} style={{ minWidth: 140 }}>
+          <Card padding={3}>
+            <Stack gap={1}>
+              <Text variant="caption" tone="muted">
                 {w.name}
               </Text>
               <Text variant="bodyStrong" numeric style={{ color: w.balance < 0 ? theme.status.short : theme.colors.text }}>
                 {formatRupiah(w.balance)}
               </Text>
-            </HStack>
-          ))}
-        </Stack>
-      </Stack>
-    </Card>
+            </Stack>
+          </Card>
+        </Box>
+      ))}
+    </HStack>
   );
 }
 

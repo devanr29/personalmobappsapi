@@ -8,6 +8,7 @@ import type { Reminder } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ComposeSheet } from "@/components/ComposeSheet";
 import { FAB } from "@/components/FAB";
+import { IconBadge } from "@/components/IconBadge";
 import { ListScreen } from "@/components/ListScreen";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { Skeleton } from "@/components/Skeleton";
@@ -58,7 +59,7 @@ export default function RemindersScreen() {
                 <SwipeableRow onDelete={() => handleDelete(reminder.id)}>
                   <Card>
                     <HStack align="center" gap={3}>
-                      <Alarm size={18} weight="fill" color={theme.colors.accent} />
+                      <IconBadge IconComponent={Alarm} tone="accent" size={32} />
                       <Stack flex={1}>
                         <Text variant="body">{reminder.content}</Text>
                         <Text variant="caption" tone="muted">

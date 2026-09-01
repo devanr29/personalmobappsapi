@@ -12,7 +12,7 @@ import { useBudgetRevision } from "@/features/budget/BudgetProvider";
 import { getCategoryPatterns } from "@/features/budget/api";
 import type { CategoryPattern, CategoryPatternTag, CategoryPatterns } from "@/features/budget/types";
 import { useResource } from "@/hooks/useResource";
-import { HStack, Stack, Text } from "@/theme/primitives";
+import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme, type Theme } from "@/theme/ThemeProvider";
 import { formatRupiah, formatRupiahCompact } from "@/utils/currency";
 
@@ -114,9 +114,11 @@ function CategoryPatternRow({ category: c, patterns }: { category: CategoryPatte
         <Stack gap={1.5} style={{ flex: 1 }}>
           <HStack justify="space-between" align="center">
             <Text variant="label">{c.name}</Text>
-            <Text variant="caption" style={{ color: tagColor }}>
-              {PATTERN_LABELS[c.pattern]}
-            </Text>
+            <Box py={0.5} px={1.5} radius="pill" bg={`${tagColor}26`} style={{ alignSelf: "flex-start" }}>
+              <Text variant="caption" style={{ color: tagColor }}>
+                {PATTERN_LABELS[c.pattern]}
+              </Text>
+            </Box>
           </HStack>
           <HStack justify="space-between" align="center">
             <Text variant="meta" tone="muted" numeric>
