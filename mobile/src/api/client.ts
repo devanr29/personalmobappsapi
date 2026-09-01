@@ -51,10 +51,11 @@ export async function setApiUrlOverride(url: string | null): Promise<void> {
 // a physical device with no error, no retry, nothing — the underlying
 // request had no timeout, so a slow or dropped connection just hung.
 // fetch() has no native timeout; AbortController is the standard way to
-// bound it. 20s is above this app's worst realistic response (the
-// aggregate /api/home read) but still short enough that "stuck loading"
-// resolves into a visible, retryable error instead of an eternal spinner.
-const REQUEST_TIMEOUT_MS = 20_000;
+// bound it. 35s covers this app's worst realistic response AND a cold
+// Railway container wake-up (~20s observed) with room to spare — a value
+// at or near the wake-up time races it and intermittently loses, which
+// surfaced as "Couldn't reach the server" on an otherwise-healthy backend.
+const REQUEST_TIMEOUT_MS = 35_000;
 
 // Wallet sync POSTs are the one exception: each call is server-bounded to a
 // short work budget but a single page of records against a far-region DB
