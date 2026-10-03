@@ -107,6 +107,7 @@ def account_to_wallet_fields(account: dict) -> dict:
         "name": account["name"],
         "kind": _ACCOUNT_TYPE_TO_KIND.get(account.get("accountType"), "cash"),
         "opening_balance": round_idr(opening_balance),
+        "wallet_balance": None if balance.get("currentBalance") is None else round_idr(balance["currentBalance"]),
         "spendable": not account.get("excludeFromStats", False),
         "archived": bool(account.get("archived", False)),
     }

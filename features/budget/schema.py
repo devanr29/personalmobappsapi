@@ -276,8 +276,19 @@ def _migration_4():
     ]
 
 
+def _migration_5():
+    """Adds budget_wallets.wallet_balance: Wallet by BudgetBakers'
+    balance.currentBalance as of the last account pull. When non-NULL it
+    IS the wallet's balance (repo.wallet_balances); NULL (never synced,
+    local-only wallet) falls back to opening_balance + ledger."""
+    def _add_wallet_balance(conn):
+        _add_column_if_missing(conn, "budget_wallets", "wallet_balance", "BIGINT")
+
+    return [_add_wallet_balance]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
-MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4()]
+MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4(), _migration_5()]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 

@@ -233,7 +233,10 @@ def _now() -> str:
 # ================================================================
 def _pull_accounts(client, cursor, apply=True) -> dict:
     result = {"created": 0, "updated": 0, "skipped": []}
-    params = {"updatedAt": f"gte.{cursor}"} if cursor else {}
+    # Always a full fetch (a handful of accounts, one page): currentBalance moves
+    # with every record, which does not necessarily bump the account's updatedAt,
+    # so an updatedAt cursor would leave synced balances stale.
+    params = {}
     max_updated = cursor
     for account in client.paginate("/v1/api/accounts", **params):
         remote_id = account["id"]
@@ -254,6 +257,7 @@ def _pull_accounts(client, cursor, apply=True) -> dict:
         else:
             if apply:
                 wallet = repo.create_wallet(fields["name"], kind=fields["kind"], opening_balance=fields["opening_balance"], spendable=fields["spendable"])
+                repo.update_wallet(wallet["id"], wallet_balance=fields["wallet_balance"])
                 if fields["archived"]:
                     repo.update_wallet(wallet["id"], archived=True)
                 repo.upsert_link(ENTITY_ACCOUNT, wallet["id"], remote_id, remote_updated_at=updated_at, local_synced_at=_now(), last_direction="pull")

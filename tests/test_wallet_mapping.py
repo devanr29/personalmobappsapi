@@ -112,3 +112,12 @@ def test_round_idr_accepts_bare_number_or_monetary_object():
     assert mapping.round_idr({"currencyCode": "IDR"}) == 0
     assert mapping.round_idr(None) == 0
 
+
+
+def test_account_to_wallet_fields_reads_current_balance():
+    account = {"name": "BCA", "accountType": "Cash", "balance": {"initial": 100, "currentBalance": 2500000.4}}
+    assert mapping.account_to_wallet_fields(account)["wallet_balance"] == 2500000
+
+
+def test_account_to_wallet_fields_missing_current_balance_is_none():
+    assert mapping.account_to_wallet_fields({"name": "X", "accountType": "Cash"})["wallet_balance"] is None

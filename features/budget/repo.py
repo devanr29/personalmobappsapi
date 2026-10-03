@@ -23,14 +23,14 @@ def _int0(value) -> int:
 # ================================================================
 # WALLETS
 # ================================================================
-_WALLET_COLS = "id, name, kind, opening_balance, spendable, is_default, archived, sort_order, created_at"
+_WALLET_COLS = "id, name, kind, opening_balance, spendable, is_default, archived, sort_order, created_at, wallet_balance"
 
 
 def _wallet_row(row):
     return {
         "id": row[0], "name": row[1], "kind": row[2], "opening_balance": row[3],
         "spendable": bool(row[4]), "is_default": bool(row[5]), "archived": bool(row[6]),
-        "sort_order": row[7], "created_at": row[8],
+        "sort_order": row[7], "created_at": row[8], "wallet_balance": row[9],
     }
 
 
@@ -75,7 +75,7 @@ def get_default_wallet():
     return _wallet_row(row) if row else None
 
 
-_WALLET_UPDATABLE = {"name", "kind", "opening_balance", "spendable", "is_default", "archived", "sort_order"}
+_WALLET_UPDATABLE = {"name", "kind", "opening_balance", "spendable", "is_default", "archived", "sort_order", "wallet_balance"}
 _WALLET_BOOL_FIELDS = {"spendable", "is_default", "archived"}
 
 
@@ -140,8 +140,10 @@ def wallet_balances(conn=None) -> dict:
     owns_conn = conn is None
     if owns_conn:
         conn = db_conn()
-    wallets = conn.execute("SELECT id, opening_balance FROM budget_wallets").fetchall()
+    wallets = conn.execute("SELECT id, opening_balance, wallet_balance FROM budget_wallets").fetchall()
     out = {row[0]: _int0(row[1]) for row in wallets}
+    # Wallet-synced balance is authoritative: no local ledger math for these.
+    synced = {row[0]: _int0(row[2]) for row in wallets if row[2] is not None}
 
     for wallet_id, delta in conn.execute(
         "SELECT wallet_id, "
@@ -164,6 +166,8 @@ def wallet_balances(conn=None) -> dict:
     ).fetchall():
         if wallet_id in out:
             out[wallet_id] += _int0(delta)
+
+    out.update(synced)
 
     if owns_conn:
         conn.close()
