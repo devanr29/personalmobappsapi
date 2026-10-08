@@ -17,7 +17,7 @@ import { useResource } from "@/hooks/useResource";
 import { AnimatedListItem, PressableScale } from "@/theme/motion";
 import { HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
-import { formatDayHeader, formatEventTime } from "@/utils/date";
+import { formatDayHeader, formatEventTime, wibDate, wibDayKey, wibParts } from "@/utils/date";
 
 const DAY_RANGES = [7, 14, 30];
 
@@ -25,7 +25,7 @@ function eventDate(event: CalendarEvent): Date {
   if (!event.start) return new Date();
   if (event.allDay) {
     const [y, m, d] = event.start.split("-").map(Number);
-    return new Date(y, m - 1, d);
+    return wibDate(y, m - 1, d);
   }
   return new Date(event.start);
 }
@@ -34,7 +34,7 @@ function groupByDay(events: CalendarEvent[]): { key: string; date: Date; events:
   const groups: { key: string; date: Date; events: CalendarEvent[] }[] = [];
   for (const event of events) {
     const date = eventDate(event);
-    const key = date.toDateString();
+    const key = wibDayKey(date);
     const last = groups[groups.length - 1];
     if (last && last.key === key) {
       last.events.push(event);
@@ -48,17 +48,19 @@ function groupByDay(events: CalendarEvent[]): { key: string; date: Date; events:
 function densityStrip(events: CalendarEvent[], days: number): HeatmapCell[] {
   const counts = new Map<string, number>();
   for (const event of events) {
-    const key = eventDate(event).toDateString();
+    const key = wibDayKey(eventDate(event));
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  const today = new Date();
+  const today = wibParts(new Date());
   const cells: HeatmapCell[] = [];
   for (let i = 0; i < days; i += 1) {
-    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
-    const count = counts.get(date.toDateString()) ?? 0;
+    const date = wibDate(today.year, today.month, today.day + i);
+    const key = wibDayKey(date);
+    const { day, weekday: sundayFirst } = wibParts(date);
+    const count = counts.get(key) ?? 0;
     // weekday: Monday=0..Sunday=6 (JS getDay() is Sunday=0..Saturday=6)
-    const weekday = (date.getDay() + 6) % 7;
-    cells.push({ date: date.toISOString().slice(0, 10), label: String(date.getDate()), weekday, value: count, count });
+    const weekday = (sundayFirst + 6) % 7;
+    cells.push({ date: key, label: String(day), weekday, value: count, count });
   }
   return cells;
 }

@@ -94,9 +94,8 @@ export function TransactionSheet({ visible, onClose, onSaved, editingTransaction
     try {
       const occurredAt = (() => {
         if (isEditing || dateChoice === "today") return undefined;
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        return toNaiveDateTime(yesterday);
+        // WIB has no DST, so "yesterday" is exactly 24h ago.
+        return toNaiveDateTime(new Date(Date.now() - 86400000));
       })();
       const input = {
         amount: parsedAmount,

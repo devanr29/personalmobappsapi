@@ -6,6 +6,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      TZ: Asia/Jakarta
+      PGTZ: Asia/Jakarta
+    # The TZ env only seeds postgresql.conf at initdb, so it'd be ignored on
+    # the existing pgdata volume — set the server timezone explicitly.
+    command: ["postgres", "-c", "timezone=Asia/Jakarta", "-c", "log_timezone=Asia/Jakarta"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,6 +27,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      TZ: Asia/Jakarta
     depends_on:
       db:
         # db.py opens its connection pool at import time, so Postgres must be

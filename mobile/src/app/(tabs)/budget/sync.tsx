@@ -18,6 +18,7 @@ import { useResource } from "@/hooks/useResource";
 import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
+import { formatShortDate, formatShortDateTime, parseNaiveDateTime } from "@/utils/date";
 
 type LastResult = { pull?: WalletPullSummary } | null;
 
@@ -148,12 +149,12 @@ function StatusCard({ data }: { data: WalletSyncStatus }) {
           {expiresSoon ? (
             <Box py={0.5} px={1.5} radius="pill" bg={`${theme.status.short}26`}>
               <Text variant="meta" style={{ color: theme.status.short }}>
-                {data.tokenExpiresAt ? new Date(data.tokenExpiresAt).toLocaleDateString() : "unknown"}
+                {data.tokenExpiresAt ? formatShortDate(new Date(data.tokenExpiresAt)) : "unknown"}
               </Text>
             </Box>
           ) : (
             <Text variant="meta">
-              {data.tokenExpiresAt ? new Date(data.tokenExpiresAt).toLocaleDateString() : "unknown"}
+              {data.tokenExpiresAt ? formatShortDate(new Date(data.tokenExpiresAt)) : "unknown"}
             </Text>
           )}
         </HStack>
@@ -170,7 +171,7 @@ function StatusCard({ data }: { data: WalletSyncStatus }) {
             Last run
           </Text>
           <Text variant="meta">
-            {data.lastRun ? `${data.lastRun.summary?.direction ?? ""} · ${new Date(data.lastRun.at).toLocaleString()}` : "never"}
+            {data.lastRun ? `${data.lastRun.summary?.direction ?? ""} · ${formatShortDateTime(parseNaiveDateTime(data.lastRun.at) ?? new Date(data.lastRun.at))}` : "never"}
           </Text>
         </HStack>
         <HStack justify="space-between">
