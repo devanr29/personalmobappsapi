@@ -23,8 +23,11 @@ def ok(data, status=200, meta=None):
     return jsonify({"data": data, "meta": meta or {}}), status
 
 
-def err(code, message, status):
-    return jsonify({"error": {"code": code, "message": message}, "meta": {}}), status
+def err(code, message, status, details=None):
+    error = {"code": code, "message": message}
+    if details is not None:
+        error["details"] = details
+    return jsonify({"error": error, "meta": {}}), status
 
 
 # ================================================================

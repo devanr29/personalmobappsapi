@@ -6,7 +6,7 @@ export interface ApiEnvelopeOk<T> {
 }
 
 export interface ApiEnvelopeError {
-  error: { code: string; message: string };
+  error: { code: string; message: string; details?: Record<string, unknown> };
   meta: Record<string, never>;
 }
 

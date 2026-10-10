@@ -18,9 +18,10 @@ import {
 import { AttachTransactionSheet, type AttachTarget } from "@/features/budget/components/AttachTransactionSheet";
 import { BudgetItemSheet } from "@/features/budget/components/BudgetItemSheet";
 import { FixedBudgetCard } from "@/features/budget/components/FixedBudgetCard";
+import { MarkPaidSheet } from "@/features/budget/components/MarkPaidSheet";
 import { TransactionSheet } from "@/features/budget/components/TransactionSheet";
 import { VariableCategoryCard } from "@/features/budget/components/VariableCategoryCard";
-import type { Bill, BudgetBreakdown, Category, TodayCard as TodayCardData, Wallet } from "@/features/budget/types";
+import type { Bill, BudgetBreakdown, BudgetVariableItem, Category, TodayCard as TodayCardData, Wallet } from "@/features/budget/types";
 import { useResource } from "@/hooks/useResource";
 import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
@@ -42,6 +43,9 @@ type OverviewResource = {
   bills: Bill[];
   categories: Category[];
 };
+
+// Placeholder for the sheets' `target` prop while they're hidden.
+const EMPTY_TARGET: AttachTarget = { kind: "bill", id: 0, name: "", amount: 0 };
 
 const STATUS_ICON: Record<BudgetStatusLevel, Icon> = {
   comfortable: CheckCircle,
@@ -66,6 +70,7 @@ export default function BudgetOverviewScreen() {
   const [payPendingBillId, setPayPendingBillId] = useState<number | null>(null);
   const [payPendingCategoryId, setPayPendingCategoryId] = useState<number | null>(null);
   const [attachTarget, setAttachTarget] = useState<AttachTarget | null>(null);
+  const [markPaidTarget, setMarkPaidTarget] = useState<AttachTarget | null>(null);
 
   const fetcher = useCallback(async (): Promise<OverviewResource> => {
     const [breakdown, bills, categories] = await Promise.all([getBreakdown(), listBills(), listCategories("variable")]);
@@ -78,14 +83,22 @@ export default function BudgetOverviewScreen() {
     refetch();
   };
 
+  const billTarget = (bill: Bill): AttachTarget => ({ kind: "bill", id: bill.id, name: bill.name, amount: bill.amount });
+  const categoryTarget = (item: BudgetVariableItem): AttachTarget => ({
+    kind: "category", id: item.categoryId as number, name: item.name,
+    amount: item.limit ?? item.remaining + item.spent - item.overBudget, spent: item.spent,
+  });
+
+  // Marking paid asks how first (MarkPaidSheet); un-marking a paid card
+  // happens straight away, as before.
   const handleTogglePaid = async (bill: Bill, paidThisPeriod: boolean) => {
+    if (!paidThisPeriod) {
+      setMarkPaidTarget(billTarget(bill));
+      return;
+    }
     setPayPendingBillId(bill.id);
     try {
-      if (paidThisPeriod) {
-        await unpayBill(bill.id);
-      } else {
-        await payBill(bill.id);
-      }
+      await unpayBill(bill.id);
       handleSaved();
     } catch {
       // No per-card error slot to surface this in — the card just stays in
@@ -105,14 +118,15 @@ export default function BudgetOverviewScreen() {
     handleSaved();
   };
 
-  const handleToggleCategoryPaid = async (categoryId: number, paid: boolean) => {
+  const handleToggleCategoryPaid = async (item: BudgetVariableItem) => {
+    const categoryId = item.categoryId as number;
+    if (!item.paid) {
+      setMarkPaidTarget(categoryTarget(item));
+      return;
+    }
     setPayPendingCategoryId(categoryId);
     try {
-      if (paid) {
-        await unpayCategory(categoryId);
-      } else {
-        await payCategory(categoryId);
-      }
+      await unpayCategory(categoryId);
       handleSaved();
     } catch {
       // No per-card error slot to surface this in — the card just stays in
@@ -249,12 +263,13 @@ export default function BudgetOverviewScreen() {
                       key={bill.id}
                       bill={bill}
                       paidThisPeriod={!stillOwedBillIds.has(bill.id)}
+                      periodAmount={breakdown?.billPeriodAmounts?.[String(bill.id)]}
                       payPending={payPendingBillId === bill.id}
                       wallets={wallets}
                       onEdit={() => setBudgetSheet({ itemKind: "bill", editing: bill })}
                       onTogglePaid={() => handleTogglePaid(bill, !stillOwedBillIds.has(bill.id))}
                       onPayAmount={(amount, walletId) => handlePayAmount(bill, amount, walletId)}
-                      onAttachTransaction={() => setAttachTarget({ kind: "bill", id: bill.id, name: bill.name })}
+                      onAttachTransaction={() => setAttachTarget(billTarget(bill))}
                     />
                   ))}
                 </CollapsibleSection>
@@ -282,8 +297,8 @@ export default function BudgetOverviewScreen() {
                           if (category) setBudgetSheet({ itemKind: "category", editing: category });
                         }}
                         onLogSpend={(amount, walletId) => handleLogSpend(item.categoryId as number, amount, walletId)}
-                        onAttachTransaction={() => setAttachTarget({ kind: "category", id: item.categoryId as number, name: item.name })}
-                        onTogglePaid={() => handleToggleCategoryPaid(item.categoryId as number, item.paid)}
+                        onAttachTransaction={() => setAttachTarget(categoryTarget(item))}
+                        onTogglePaid={() => handleToggleCategoryPaid(item)}
                         onPayAmount={(amount, walletId, createTransactionFlag) =>
                           handlePayCategoryAmount(item.categoryId as number, amount, walletId, createTransactionFlag)
                         }
@@ -306,11 +321,21 @@ export default function BudgetOverviewScreen() {
         itemKind={budgetSheet?.itemKind ?? "category"}
         editing={budgetSheet?.editing}
       />
+      <MarkPaidSheet
+        visible={markPaidTarget !== null}
+        onClose={() => setMarkPaidTarget(null)}
+        onPaid={handleSaved}
+        onChooseAttach={() => {
+          setAttachTarget(markPaidTarget);
+          setMarkPaidTarget(null);
+        }}
+        target={markPaidTarget ?? EMPTY_TARGET}
+      />
       <AttachTransactionSheet
         visible={attachTarget !== null}
         onClose={() => setAttachTarget(null)}
         onAttached={handleSaved}
-        target={attachTarget ?? { kind: "category", id: 0, name: "" }}
+        target={attachTarget ?? EMPTY_TARGET}
       />
     </SafeAreaView>
   );

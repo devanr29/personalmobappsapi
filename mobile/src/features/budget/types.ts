@@ -65,6 +65,9 @@ export interface BudgetVariableItem {
    * as 0 regardless of actual spend once set, mirroring a paid bill's
    * still_owed exclusion. See VariableCategoryCard's "Mark as paid". */
   paid: boolean;
+  /** The limit in effect this period — monthlyLimit, or the "this period
+   * only" amount chosen when it was marked paid. */
+  limit: number | null;
 }
 
 export interface BudgetUnmatchedItem {
@@ -86,6 +89,9 @@ export interface BudgetBreakdown {
   stillOwed: BudgetLineItem[];
   pendingAmounts: BudgetLineItem[];
   remainingVar: BudgetVariableItem[];
+  /** Bills paid this period at a "this period only" amount, keyed by bill
+   * id (JSON object keys arrive as strings). */
+  billPeriodAmounts: Record<string, number>;
   unmatchedSpending: BudgetUnmatchedItem[];
   totalStillOwed: number;
   totalVarRemaining: number;

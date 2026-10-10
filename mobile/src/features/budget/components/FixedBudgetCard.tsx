@@ -15,30 +15,32 @@ export type FixedBudgetCardProps = {
    * period-scoped fact from budget_bill_payments, not a property of the
    * bill row itself, so it's threaded in rather than read off `bill`. */
   paidThisPeriod: boolean;
+  /** The "this period only" amount it was paid at, when that differed
+   * from bill.amount (breakdown.billPeriodAmounts). */
+  periodAmount?: number;
   payPending: boolean;
   wallets: Wallet[];
   onEdit: () => void;
   onTogglePaid: () => void;
   onPayAmount: (amount: number, walletId: number) => Promise<void>;
-  /** Opens the picker for settling this bill with an expense that's already
-   * in the ledger (e.g. pulled from Wallet) instead of logging a fresh
-   * payment — see AttachTransactionSheet / service.pay_bill's transaction_id
-   * path. */
+  /** Opens the picker for settling this bill with expenses that are
+   * already in the ledger (e.g. pulled from Wallet) instead of logging a
+   * fresh payment — see AttachTransactionSheet / service.pay_bill's
+   * transaction_ids path. */
   onAttachTransaction: () => void;
 };
 
 /** One fixed monthly obligation (a bill — rent, subscriptions, etc.) as its
  * own expandable card. Mirrors chat_view.py's "Fixed expenses still to pay"
  * section: an unpaid bill counts toward total_still_owed, which is
- * subtracted from free_money before the daily budget is derived. Marking
- * one paid (via payBill/unpayBill) removes it from that deduction the
- * moment the breakdown is refetched — the wallet balance also drops by the
- * same amount, so free_money itself doesn't move, only which bucket it's
- * sitting in (reserved vs already spent). "Pay a different amount" covers
+ * subtracted from free_money before the daily budget is derived. "Mark as
+ * paid" opens MarkPaidSheet (mark only / mark and log a payment / attach
+ * existing expenses); any of them removes the bill from that deduction
+ * the moment the breakdown is refetched. "Pay a different amount" covers
  * the case where the real payment doesn't match the bill's configured
  * amount (e.g. rent paid at a discount) — service.pay_bill already accepts
  * a custom amount, only unused by the mobile UI until now. */
-export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onEdit, onTogglePaid, onPayAmount, onAttachTransaction }: FixedBudgetCardProps) {
+export function FixedBudgetCard({ bill, paidThisPeriod, periodAmount, payPending, wallets, onEdit, onTogglePaid, onPayAmount, onAttachTransaction }: FixedBudgetCardProps) {
   const theme = useTheme();
 
   return (
@@ -58,7 +60,7 @@ export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onE
             ) : null}
           </Stack>
           <Text variant="meta" numeric tone={paidThisPeriod ? "muted" : "primary"}>
-            {formatRupiah(bill.amount)}
+            {formatRupiah(paidThisPeriod && periodAmount != null ? periodAmount : bill.amount)}
           </Text>
         </HStack>
       )}
@@ -94,7 +96,7 @@ export function FixedBudgetCard({ bill, paidThisPeriod, payPending, wallets, onE
               <HStack align="center" gap={1.5}>
                 <Paperclip size={14} color={theme.colors.accent} />
                 <Text variant="caption" tone="accent">
-                  Attach an existing transaction
+                  Attach existing transactions
                 </Text>
               </HStack>
             </PressableScale>

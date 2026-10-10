@@ -97,10 +97,22 @@ export function deleteCategory(id: number) {
   return apiClient.delete<{ id: number; deleted: boolean }>(`/api/budget/categories/${id}`);
 }
 
-export function payCategory(
-  id: number,
-  input?: { walletId?: number; amount?: number; occurredAt?: string; createTransaction?: boolean },
-) {
+/** How a budget item gets marked paid. Default (no fields) logs a new
+ * expense; `createTransaction: false` records only the "paid" fact;
+ * `transactionIds` settles it with expenses already in the ledger. When
+ * those total something other than the card amount the server answers
+ * 409 AMOUNT_MISMATCH (details `{ total, amount }`) unless `amountChange`
+ * says whether the new amount is for this period only or permanent. */
+export type PayInput = {
+  walletId?: number;
+  amount?: number;
+  occurredAt?: string;
+  createTransaction?: boolean;
+  transactionIds?: number[];
+  amountChange?: "period" | "permanent";
+};
+
+export function payCategory(id: number, input?: PayInput) {
   return apiClient.post<{ transaction: Transaction | null; summary: BudgetSnapshot | null }>(
     `/api/budget/categories/${id}/pay`,
     input ?? {},
@@ -144,11 +156,8 @@ export function deleteBill(id: number) {
   return apiClient.delete<{ id: number; deleted: boolean }>(`/api/budget/bills/${id}`);
 }
 
-export function payBill(
-  id: number,
-  input?: { walletId?: number; amount?: number; occurredAt?: string; transactionId?: number },
-) {
-  return apiClient.post<{ transaction: Transaction; summary: BudgetSnapshot | null }>(
+export function payBill(id: number, input?: PayInput) {
+  return apiClient.post<{ transaction: Transaction | null; summary: BudgetSnapshot | null }>(
     `/api/budget/bills/${id}/pay`,
     input ?? {},
   );

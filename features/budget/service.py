@@ -9,7 +9,7 @@ from database import state_get, state_set
 from db import db_conn
 from features.budget import repo, insights
 from features.budget.compute import compute_budget_by_id
-from features.budget.errors import BudgetConflict, BudgetNotFound, BudgetValidationError
+from features.budget.errors import BudgetAmountMismatch, BudgetConflict, BudgetNotFound, BudgetValidationError
 from features.budget.periods import ensure_current_period
 
 
@@ -74,7 +74,14 @@ def build_period_view(conn=None):
         # already draw this exact line.
         budgeted = [c for c in variable if c["monthly_limit"]]
         variable_ids = {c["id"] for c in budgeted}
-        categories = [{"id": c["id"], "name": c["name"], "budget": c["monthly_limit"]} for c in budgeted]
+        # A "this period only" amount chosen when marking a category paid
+        # (budget_category_payments.amount_override) replaces its limit for
+        # this period's math and display; monthly_limit itself is untouched.
+        category_overrides = repo.get_category_payment_overrides(period["id"], conn=conn)
+        categories = [
+            {"id": c["id"], "name": c["name"], "budget": category_overrides.get(c["id"], c["monthly_limit"])}
+            for c in budgeted
+        ]
         spend_rows = repo.spend_by_category_for_period(period["id"], conn=conn)
         spend_by_category_id = {r["category_id"]: r["spend"] for r in spend_rows}
         paid_category_ids = repo.get_paid_category_ids(period["id"], conn=conn)
@@ -108,7 +115,14 @@ def build_period_view(conn=None):
             paid_category_ids=paid_category_ids,
             goal_reservations=goal_reservations(period, conn=conn),
         )
+        # The effective limit each card shows ("Spent X of Y"), override
+        # included — attached after compute so compute_budget_by_id stays
+        # shape-identical to the name-matched compute_budget().
+        budget_by_id = {c["id"]: c["budget"] for c in categories}
+        for v in data["remaining_var"]:
+            v["limit"] = budget_by_id.get(v["id"])
         data["period_id"] = period["id"]
+        data["bill_period_amounts"] = repo.get_bill_payment_overrides(period["id"], conn=conn)
         data["wallets"] = [{**w, "balance": balances.get(w["id"], 0)} for w in wallets]
         return data
     finally:
@@ -248,10 +262,27 @@ def update_transaction(txn_id, **fields):
 
 
 def delete_transaction(txn_id):
+    """Soft-deletes the transaction and drops whatever bill/category
+    payment links it backed. A payment left with no links at all goes
+    with it, so the card reads unpaid again — deleting the expense that
+    marked a bill paid un-pays the bill. A payment that never had links
+    ("just mark as paid") is never touched here, and one with another
+    attached transaction still standing stays paid."""
     if repo.get_transaction(txn_id) is None:
         raise BudgetNotFound(f"No transaction with id {txn_id}.")
     txn = repo.soft_delete_transaction(txn_id)
+    _release_payment_links(txn_id)
     return txn, get_summary()
+
+
+def _release_payment_links(txn_id):
+    links = repo.get_links_for_transaction(txn_id)
+    if not links:
+        return
+    repo.delete_links_for_transaction(txn_id)
+    for link in links:
+        if not repo.get_payment_links(link["kind"], link["payment_id"]):
+            repo.delete_payment_by_id(link["kind"], link["payment_id"])
 
 
 def list_transactions(**filters):
@@ -265,6 +296,161 @@ def list_transactions(**filters):
     if date_to and len(date_to) == 10:
         filters["date_to"] = date_to + " 23:59:59"
     return repo.get_transactions(**filters)
+
+
+# ================================================================
+# MARK AS PAID — shared by bills and variable categories. A payment row
+# (budget_bill_payments / budget_category_payments) is the "paid this
+# period" fact; budget_payment_transactions links it to the transactions
+# that settle it (none, one created by pay, or many attached).
+# ================================================================
+_VALID_AMOUNT_CHANGES = {"period", "permanent"}
+
+
+def _resolve_transaction_ids(transaction_ids, transaction_id):
+    """Merges the legacy single transactionId into transactionIds, keeping
+    order and dropping duplicates. None means "not attaching"."""
+    ids = list(transaction_ids or [])
+    if transaction_id is not None:
+        ids.append(transaction_id)
+    if not ids and transaction_ids is None:
+        return None
+    resolved = []
+    for value in ids:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise BudgetValidationError("transactionIds must be a list of integer ids.")
+        if value not in resolved:
+            resolved.append(value)
+    if not resolved:
+        raise BudgetValidationError("transactionIds must not be empty.")
+    return resolved
+
+
+def _settle_with_transactions(kind, target, period, transaction_ids, amount_change):
+    """Marks `target` (a bill or variable category) paid for `period` by
+    attaching expenses that are already in the ledger — no new rows, no
+    balance change. Returns the attached transactions (re-read).
+
+    The attached total is compared with the card amount first — a bill's
+    `amount`, or for a category its monthly_limit vs. the period spend the
+    card will show once these are filed under it. On a difference with no
+    amount_change this raises BudgetAmountMismatch before anything is
+    written. amount_change='permanent' rewrites the bill amount /
+    monthly_limit; 'period' records it on the payment row only."""
+    from db import integrity_errors
+
+    if amount_change is not None and amount_change not in _VALID_AMOUNT_CHANGES:
+        raise BudgetValidationError(f"amountChange must be one of {sorted(_VALID_AMOUNT_CHANGES)}.")
+
+    txns = []
+    for txn_id in transaction_ids:
+        txn = repo.get_transaction(txn_id)
+        if txn is None or txn["deleted_at"] is not None:
+            raise BudgetNotFound(f"No transaction with id {txn_id}.")
+        if txn["direction"] != "expense":
+            raise BudgetValidationError("Only expenses can mark a budget item paid.")
+        txns.append(txn)
+
+    label = target["name"]
+    if repo.get_linked_transaction_ids(kind, transaction_ids):
+        what = "bill" if kind == "bill" else "budget category"
+        raise BudgetConflict(f"A selected transaction already settles another {what}.")
+    existing_payment = (
+        repo.get_bill_payment(target["id"], period["id"]) if kind == "bill"
+        else repo.get_category_payment(target["id"], period["id"])
+    )
+    if existing_payment is not None:
+        raise BudgetConflict(f"{label} is already marked paid for this period.")
+
+    if kind == "bill":
+        card_amount = target["amount"]
+        total = sum(t["amount"] for t in txns)
+    else:
+        card_amount = target["monthly_limit"] or 0
+        spend_rows = repo.spend_by_category_for_period(period["id"])
+        spent = next((r["spend"] for r in spend_rows if r["category_id"] == target["id"]), 0)
+        total = spent + sum(
+            t["amount"] for t in txns
+            if not (t["category_id"] == target["id"] and t["period_id"] == period["id"])
+        )
+
+    amount_override = None
+    if total != card_amount:
+        if amount_change is None:
+            raise BudgetAmountMismatch(
+                f"Selected total {total} differs from {label}'s amount {card_amount}.",
+                total=total, amount=card_amount,
+            )
+        if amount_change == "period":
+            amount_override = total
+
+    # Re-file each transaction under the target, remembering where it was.
+    links = []
+    for txn in txns:
+        if kind == "bill":
+            patch = {"bill_id": target["id"]}
+            if target["category_id"] is not None and txn["category_id"] is None:
+                patch["category_id"] = target["category_id"]
+        else:
+            patch = {"category_id": target["id"]}
+        repo.update_transaction(txn["id"], **patch)
+        links.append({"transaction_id": txn["id"], "created_by_payment": False,
+                      "prev_category_id": txn["category_id"]})
+
+    def undo_refiling():
+        for txn in txns:
+            restore = {"category_id": txn["category_id"]}
+            if kind == "bill":
+                restore["bill_id"] = txn["bill_id"]
+            repo.update_transaction(txn["id"], **restore)
+
+    try:
+        if kind == "bill":
+            payment_id = repo.create_bill_payment(
+                target["id"], period["id"], None, str(now_jkt()), amount_override=amount_override,
+            )
+        else:
+            payment_id = repo.create_category_payment(
+                target["id"], period["id"], None, str(now_jkt()), amount_override=amount_override,
+            )
+    except integrity_errors():
+        undo_refiling()
+        raise BudgetConflict(f"{label} is already marked paid for this period.")
+
+    try:
+        repo.add_payment_links(kind, payment_id, links)
+    except integrity_errors():
+        repo.delete_payment_by_id(kind, payment_id)
+        undo_refiling()
+        raise BudgetConflict("A selected transaction was just attached somewhere else.")
+
+    if amount_change == "permanent" and total != card_amount:
+        if kind == "bill":
+            repo.update_bill(target["id"], amount=total)
+        else:
+            repo.update_category(target["id"], monthly_limit=total)
+
+    return [repo.get_transaction(t["id"]) for t in txns]
+
+
+def _unsettle(kind, payment):
+    """Undoes whatever pay did to the payment's transactions: rows pay
+    created are soft-deleted, attached rows are untied (and re-filed to
+    the category they had before), then the payment itself goes."""
+    for link in repo.get_payment_links(kind, payment["id"]):
+        txn = repo.get_transaction(link["transaction_id"])
+        if txn is None or txn["deleted_at"] is not None:
+            continue
+        if link["created_by_payment"]:
+            repo.soft_delete_transaction(txn["id"])
+            continue
+        patch = {}
+        if kind == "bill":
+            patch["bill_id"] = None
+        if txn["category_id"] != link["prev_category_id"]:
+            patch["category_id"] = link["prev_category_id"]
+        if patch:
+            repo.update_transaction(txn["id"], **patch)
 
 
 # ================================================================
@@ -299,7 +485,8 @@ def delete_category(category_id):
     repo.delete_category(category_id)
 
 
-def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=None, create_transaction=True):
+def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=None, create_transaction=True,
+                          transaction_ids=None, amount_change=None):
     """Marks a variable-budget category "paid" for the current period —
     the Variable-budget sibling of pay_bill(). Unlike a bill, a category's
     `remaining` is normally derived purely from real spend
@@ -317,7 +504,10 @@ def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=
     period (monthly_limit minus spend already logged via "Log spend"), so
     a one-tap "mark as paid" can't double-count spend that's already
     there — and if nothing is left, no transaction is created at all,
-    since there'd be nothing new to record."""
+    since there'd be nothing new to record.
+
+    transaction_ids instead settles it with expenses already in the
+    ledger (see _settle_with_transactions); the first one is returned."""
     from db import integrity_errors
 
     category = repo.get_category(category_id)
@@ -329,6 +519,11 @@ def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=
         raise BudgetValidationError("amount must be a positive number.")
 
     period = ensure_current_period(get_payroll_day())
+
+    attach_ids = _resolve_transaction_ids(transaction_ids, None)
+    if attach_ids is not None:
+        attached = _settle_with_transactions("category", category, period, attach_ids, amount_change)
+        return attached[0], get_summary()
 
     txn = None
     if create_transaction:
@@ -351,7 +546,7 @@ def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=
             )
 
     try:
-        repo.create_category_payment(category_id, period["id"], txn["id"] if txn else None, str(now_jkt()))
+        payment_id = repo.create_category_payment(category_id, period["id"], txn["id"] if txn else None, str(now_jkt()))
     except integrity_errors():
         # repo.create_category_payment() already rolled back and closed its
         # own (now-failed) connection — soft_delete_transaction() below
@@ -360,6 +555,10 @@ def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=
             repo.soft_delete_transaction(txn["id"])
         raise BudgetConflict(f"{category['name']} is already marked paid for this period.")
 
+    if txn is not None:
+        repo.add_payment_links("category", payment_id, [
+            {"transaction_id": txn["id"], "created_by_payment": True, "prev_category_id": category_id},
+        ])
     return txn, get_summary()
 
 
@@ -373,8 +572,7 @@ def unpay_variable_category(category_id):
     if payment is None:
         raise BudgetNotFound(f"{category['name']} is not marked paid for this period.")
 
-    if payment["transaction_id"] is not None:
-        repo.soft_delete_transaction(payment["transaction_id"])
+    _unsettle("category", payment)
     repo.delete_category_payment(category_id, period["id"])
     return category, get_summary()
 
@@ -476,14 +674,19 @@ def delete_bill(bill_id):
     repo.delete_bill(bill_id)
 
 
-def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None, transaction_id=None):
-    """Marks a bill paid for the current period. Normally logs a fresh
-    expense for it; pass `transaction_id` to instead settle it with an
-    expense that's already in the ledger (a Wallet sync, an earlier manual
-    entry) — no new row and no balance change, since the money already
-    moved when that transaction was first recorded. The attached one is
-    just re-filed under the bill (and the bill's category, only when it had
-    none of its own)."""
+def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None, transaction_id=None,
+             transaction_ids=None, create_transaction=True, amount_change=None):
+    """Marks a bill paid for the current period, one of three ways:
+
+     - default: logs a fresh expense for it (`amount` overrides the bill's).
+     - transaction_ids (or the legacy single transaction_id): settles it
+       with expenses already in the ledger — no new row and no balance
+       change. See _settle_with_transactions for the amount check.
+     - create_transaction=False: records only the "paid" fact, no
+       transaction at all (the money left some other way).
+
+    Returns (transaction or None, summary); with attached transactions the
+    first one is returned."""
     from db import integrity_errors
 
     bill = repo.get_bill(bill_id)
@@ -494,18 +697,13 @@ def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None, transaction
 
     period = ensure_current_period(get_payroll_day())
 
-    if transaction_id is not None:
-        existing = repo.get_transaction(transaction_id)
-        if existing is None or existing["deleted_at"] is not None:
-            raise BudgetNotFound(f"No transaction with id {transaction_id}.")
-        if existing["direction"] != "expense":
-            raise BudgetValidationError("Only an expense can settle a bill.")
-        patch = {"bill_id": bill["id"]}
-        if bill["category_id"] is not None and existing["category_id"] is None:
-            patch["category_id"] = bill["category_id"]
-        repo.update_transaction(transaction_id, **patch)
-        txn = repo.get_transaction(transaction_id)
-    else:
+    attach_ids = _resolve_transaction_ids(transaction_ids, transaction_id)
+    if attach_ids is not None:
+        attached = _settle_with_transactions("bill", bill, period, attach_ids, amount_change)
+        return attached[0], get_summary()
+
+    txn = None
+    if create_transaction:
         resolved_wallet_id = wallet_id or bill["wallet_id"]
         if resolved_wallet_id is None:
             default_wallet = repo.get_default_wallet()
@@ -520,17 +718,19 @@ def pay_bill(bill_id, wallet_id=None, amount=None, occurred_at=None, transaction
         )
 
     try:
-        repo.create_bill_payment(bill["id"], period["id"], txn["id"], str(now_jkt()))
+        payment_id = repo.create_bill_payment(bill["id"], period["id"], txn["id"] if txn else None, str(now_jkt()))
     except integrity_errors():
         # repo.create_bill_payment() already rolled back and closed its own
-        # (now-failed) connection — the calls below open fresh ones, so
+        # (now-failed) connection — the call below opens a fresh one, so
         # there's no poisoned state to carry over here.
-        if transaction_id is None:
+        if txn is not None:
             repo.soft_delete_transaction(txn["id"])
-        else:
-            repo.update_transaction(transaction_id, bill_id=None)
         raise BudgetConflict(f"Bill {bill['name']} is already marked paid for this period.")
 
+    if txn is not None:
+        repo.add_payment_links("bill", payment_id, [
+            {"transaction_id": txn["id"], "created_by_payment": True, "prev_category_id": bill["category_id"]},
+        ])
     return txn, get_summary()
 
 
@@ -544,15 +744,7 @@ def unpay_bill(bill_id):
     if payment is None:
         raise BudgetNotFound(f"Bill {bill['name']} is not marked paid for this period.")
 
-    if payment["transaction_id"] is not None:
-        settling = repo.get_transaction(payment["transaction_id"])
-        if settling is not None and settling["source"] == "bill":
-            # pay_bill() created this one — remove it along with the payment.
-            repo.soft_delete_transaction(payment["transaction_id"])
-        elif settling is not None:
-            # An expense that predated this payment (attached via
-            # /pay { transactionId }) — leave it in the ledger, just untie it.
-            repo.update_transaction(payment["transaction_id"], bill_id=None)
+    _unsettle("bill", payment)
     repo.delete_bill_payment(bill_id, period["id"])
     return bill, get_summary()
 

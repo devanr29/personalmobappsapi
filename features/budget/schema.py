@@ -287,8 +287,65 @@ def _migration_5():
     return [_add_wallet_balance]
 
 
+def _migration_6():
+    """Lets one bill/category payment be settled by MANY transactions
+    (budget_payment_transactions), replacing the single
+    budget_*_payments.transaction_id column — which stays in place but is
+    no longer read. created_by_payment tells unpay whether to soft-delete
+    the row (pay created it) or only untie it (an existing expense was
+    attached); prev_category_id lets unpay re-file an attached row back
+    where it was. UNIQUE(kind, transaction_id) keeps one expense from
+    settling two bills (or two categories).
+
+    Backfilled rows take prev_category_id from the transaction's CURRENT
+    category: the original one was never recorded, so unpay leaves the
+    category as it is (the old behavior) rather than guessing.
+
+    amount_override on both payment tables is the "this period only"
+    amount chosen when an attached total differed from the card amount."""
+    def _add_amount_overrides(conn):
+        _add_column_if_missing(conn, "budget_bill_payments", "amount_override", "BIGINT")
+        _add_column_if_missing(conn, "budget_category_payments", "amount_override", "BIGINT")
+
+    def _backfill_links(conn):
+        for kind, table, sources in (
+            ("bill", "budget_bill_payments", "('bill')"),
+            ("category", "budget_category_payments", "('category_payment')"),
+        ):
+            conn.execute(
+                "INSERT INTO budget_payment_transactions "
+                "(kind, payment_id, transaction_id, created_by_payment, prev_category_id) "
+                "SELECT '" + kind + "', p.id, p.transaction_id, "
+                "CASE WHEN t.source IN " + sources + " THEN 1 ELSE 0 END, t.category_id "
+                "FROM " + table + " p JOIN budget_transactions t ON t.id = p.transaction_id "
+                "WHERE p.transaction_id IS NOT NULL AND NOT EXISTS ("
+                "SELECT 1 FROM budget_payment_transactions l "
+                "WHERE l.kind = '" + kind + "' AND l.transaction_id = p.transaction_id)"
+            )
+
+    return [
+        f"""
+        CREATE TABLE IF NOT EXISTS budget_payment_transactions (
+            id                 {_PK},
+            kind               TEXT    NOT NULL,
+            payment_id         INTEGER NOT NULL,
+            transaction_id     INTEGER NOT NULL REFERENCES budget_transactions(id) ON DELETE CASCADE,
+            created_by_payment INTEGER NOT NULL DEFAULT 0,
+            prev_category_id   INTEGER,
+            UNIQUE(kind, transaction_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_budget_payment_txn_payment ON budget_payment_transactions(kind, payment_id)",
+        _add_amount_overrides,
+        _backfill_links,
+    ]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
-MIGRATIONS = [_migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4(), _migration_5()]
+MIGRATIONS = [
+    _migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4(), _migration_5(),
+    _migration_6(),
+]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 
 

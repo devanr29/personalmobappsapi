@@ -67,11 +67,15 @@ export const LONG_REQUEST_TIMEOUT_MS = 120_000;
 export class ApiError extends Error {
   code: string;
   status: number;
+  /** Structured extras some errors carry (e.g. AMOUNT_MISMATCH's
+   * `{ total, amount }`). */
+  details?: Record<string, unknown>;
 
-  constructor(code: string, message: string, status: number) {
+  constructor(code: string, message: string, status: number, details?: Record<string, unknown>) {
     super(message);
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -112,7 +116,7 @@ async function requestFull<T, M = Record<string, never>>(
   }
 
   if ("error" in body) {
-    throw new ApiError(body.error.code, body.error.message, res.status);
+    throw new ApiError(body.error.code, body.error.message, res.status, body.error.details);
   }
   return body;
 }

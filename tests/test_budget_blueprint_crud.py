@@ -85,6 +85,54 @@ def test_bill_pay_and_unpay_routes(client, auth_headers):
         conn.close()
 
 
+def test_bill_pay_amount_mismatch_returns_details(client, auth_headers):
+    wallet = repo.create_wallet("_HttpMismatchWallet", opening_balance=500_000, is_default=False)
+    bill = repo.create_bill("_HttpMismatchBill", 50_000, wallet_id=wallet["id"])
+    txn = repo.create_transaction(30_000, "expense", wallet_id=wallet["id"])
+    try:
+        resp = client.post(
+            f"/api/budget/bills/{bill['id']}/pay", headers=auth_headers, json={"transactionIds": [txn["id"]]},
+        )
+        assert resp.status_code == 409
+        error = resp.get_json()["error"]
+        assert error["code"] == "AMOUNT_MISMATCH"
+        assert error["details"] == {"total": 30_000, "amount": 50_000}
+
+        resp = client.post(
+            f"/api/budget/bills/{bill['id']}/pay", headers=auth_headers,
+            json={"transactionIds": [txn["id"]], "amountChange": "period"},
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["data"]["transaction"]["id"] == txn["id"]
+
+        resp = client.get("/api/budget/breakdown", headers=auth_headers)
+        assert resp.get_json()["data"]["billPeriodAmounts"][str(bill["id"])] == 30_000
+    finally:
+        conn = _teardown_conn()
+        conn.execute("DELETE FROM budget_bill_payments WHERE bill_id = ?", (bill["id"],))
+        conn.execute("DELETE FROM budget_transactions WHERE id = ?", (txn["id"],))
+        conn.execute("DELETE FROM budget_bills WHERE id = ?", (bill["id"],))
+        conn.execute("DELETE FROM budget_wallets WHERE id = ?", (wallet["id"],))
+        conn.commit()
+        conn.close()
+
+
+def test_bill_pay_mark_only_route_returns_null_transaction(client, auth_headers):
+    bill = repo.create_bill("_HttpMarkOnlyBill", 50_000)
+    try:
+        resp = client.post(
+            f"/api/budget/bills/{bill['id']}/pay", headers=auth_headers, json={"createTransaction": False},
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()["data"]["transaction"] is None
+    finally:
+        conn = _teardown_conn()
+        conn.execute("DELETE FROM budget_bill_payments WHERE bill_id = ?", (bill["id"],))
+        conn.execute("DELETE FROM budget_bills WHERE id = ?", (bill["id"],))
+        conn.commit()
+        conn.close()
+
+
 def test_category_pay_and_unpay_routes(client, auth_headers):
     wallet = repo.create_wallet("_HttpCategoryWallet", opening_balance=500_000, is_default=False)
     category = repo.create_category("_HttpCategoryPay", "variable", monthly_limit=50_000)

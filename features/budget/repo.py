@@ -319,15 +319,16 @@ def get_paid_category_ids(period_id, conn=None) -> set:
     return {r[0] for r in rows}
 
 
-def create_category_payment(category_id, period_id, transaction_id, paid_at):
+def create_category_payment(category_id, period_id, transaction_id, paid_at, amount_override=None):
     """Mirrors create_bill_payment(): UNIQUE(category_id, period_id) is
     service.pay_variable_category()'s real concurrency guard against
     double-marking a category paid in one period."""
     conn = db_conn()
     try:
         cur = conn.execute(
-            "INSERT INTO budget_category_payments (category_id, period_id, transaction_id, paid_at) VALUES (?, ?, ?, ?)",
-            (category_id, period_id, transaction_id, paid_at),
+            "INSERT INTO budget_category_payments (category_id, period_id, transaction_id, paid_at, amount_override) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (category_id, period_id, transaction_id, paid_at, amount_override),
         )
         payment_id = cur.lastrowid
         conn.commit()
@@ -342,17 +343,37 @@ def create_category_payment(category_id, period_id, transaction_id, paid_at):
 def get_category_payment(category_id, period_id):
     conn = db_conn()
     row = conn.execute(
-        "SELECT id, category_id, period_id, transaction_id, paid_at FROM budget_category_payments "
+        "SELECT id, category_id, period_id, transaction_id, paid_at, amount_override FROM budget_category_payments "
         "WHERE category_id = ? AND period_id = ?",
         (category_id, period_id),
     ).fetchone()
     conn.close()
     if row is None:
         return None
-    return {"id": row[0], "category_id": row[1], "period_id": row[2], "transaction_id": row[3], "paid_at": row[4]}
+    return {"id": row[0], "category_id": row[1], "period_id": row[2], "transaction_id": row[3], "paid_at": row[4],
+            "amount_override": row[5]}
+
+
+def get_category_payment_overrides(period_id, conn=None) -> dict:
+    """{category_id: amount_override} for this period's "this period only"
+    limits — build_period_view() uses it as the category's budget."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute(
+        "SELECT category_id, amount_override FROM budget_category_payments "
+        "WHERE period_id = ? AND amount_override IS NOT NULL",
+        (period_id,),
+    ).fetchall()
+    if owns_conn:
+        conn.close()
+    return {r[0]: _int0(r[1]) for r in rows}
 
 
 def delete_category_payment(category_id, period_id):
+    payment = get_category_payment(category_id, period_id)
+    if payment is not None:
+        delete_payment_links("category", payment["id"])
     conn = db_conn()
     conn.execute(
         "DELETE FROM budget_category_payments WHERE category_id = ? AND period_id = ?", (category_id, period_id)
@@ -499,7 +520,7 @@ def get_paid_bill_ids(period_id, conn=None) -> set:
     return {r[0] for r in rows}
 
 
-def create_bill_payment(bill_id, period_id, transaction_id, paid_at):
+def create_bill_payment(bill_id, period_id, transaction_id, paid_at, amount_override=None):
     """UNIQUE(bill_id, period_id) is service.pay_bill()'s real concurrency
     guard against double-paying a bill in one period — a pre-check SELECT
     would only narrow the race, not close it. On a violation the INSERT
@@ -510,8 +531,9 @@ def create_bill_payment(bill_id, period_id, transaction_id, paid_at):
     conn = db_conn()
     try:
         cur = conn.execute(
-            "INSERT INTO budget_bill_payments (bill_id, period_id, transaction_id, paid_at) VALUES (?, ?, ?, ?)",
-            (bill_id, period_id, transaction_id, paid_at),
+            "INSERT INTO budget_bill_payments (bill_id, period_id, transaction_id, paid_at, amount_override) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (bill_id, period_id, transaction_id, paid_at, amount_override),
         )
         payment_id = cur.lastrowid
         conn.commit()
@@ -526,21 +548,136 @@ def create_bill_payment(bill_id, period_id, transaction_id, paid_at):
 def get_bill_payment(bill_id, period_id):
     conn = db_conn()
     row = conn.execute(
-        "SELECT id, bill_id, period_id, transaction_id, paid_at FROM budget_bill_payments "
+        "SELECT id, bill_id, period_id, transaction_id, paid_at, amount_override FROM budget_bill_payments "
         "WHERE bill_id = ? AND period_id = ?",
         (bill_id, period_id),
     ).fetchone()
     conn.close()
     if row is None:
         return None
-    return {"id": row[0], "bill_id": row[1], "period_id": row[2], "transaction_id": row[3], "paid_at": row[4]}
+    return {"id": row[0], "bill_id": row[1], "period_id": row[2], "transaction_id": row[3], "paid_at": row[4],
+            "amount_override": row[5]}
+
+
+def get_bill_payment_overrides(period_id, conn=None) -> dict:
+    """{bill_id: amount_override} for bills paid this period at a "this
+    period only" amount."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db_conn()
+    rows = conn.execute(
+        "SELECT bill_id, amount_override FROM budget_bill_payments "
+        "WHERE period_id = ? AND amount_override IS NOT NULL",
+        (period_id,),
+    ).fetchall()
+    if owns_conn:
+        conn.close()
+    return {r[0]: _int0(r[1]) for r in rows}
 
 
 def delete_bill_payment(bill_id, period_id):
+    payment = get_bill_payment(bill_id, period_id)
+    if payment is not None:
+        delete_payment_links("bill", payment["id"])
     conn = db_conn()
     conn.execute(
         "DELETE FROM budget_bill_payments WHERE bill_id = ? AND period_id = ?", (bill_id, period_id)
     )
+    conn.commit()
+    conn.close()
+
+
+# ================================================================
+# PAYMENT LINKS — budget_payment_transactions: which transactions settle
+# a bill/category payment. kind is 'bill' or 'category'; payment_id points
+# at budget_bill_payments.id / budget_category_payments.id respectively.
+# ================================================================
+def _payment_link_row(row):
+    return {
+        "id": row[0], "kind": row[1], "payment_id": row[2], "transaction_id": row[3],
+        "created_by_payment": bool(row[4]), "prev_category_id": row[5],
+    }
+
+
+_PAYMENT_LINK_COLS = "id, kind, payment_id, transaction_id, created_by_payment, prev_category_id"
+
+
+def add_payment_links(kind, payment_id, links):
+    """links: [{"transaction_id", "created_by_payment", "prev_category_id"}].
+    All-or-nothing: UNIQUE(kind, transaction_id) violations roll the whole
+    batch back and re-raise, so the caller can undo its own writes."""
+    conn = db_conn()
+    try:
+        for link in links:
+            conn.execute(
+                "INSERT INTO budget_payment_transactions "
+                "(kind, payment_id, transaction_id, created_by_payment, prev_category_id) VALUES (?, ?, ?, ?, ?)",
+                (kind, payment_id, link["transaction_id"], int(bool(link.get("created_by_payment"))),
+                 link.get("prev_category_id")),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_payment_links(kind, payment_id):
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT " + _PAYMENT_LINK_COLS + " FROM budget_payment_transactions WHERE kind = ? AND payment_id = ? ORDER BY id",
+        (kind, payment_id),
+    ).fetchall()
+    conn.close()
+    return [_payment_link_row(r) for r in rows]
+
+
+def get_links_for_transaction(txn_id):
+    conn = db_conn()
+    rows = conn.execute(
+        "SELECT " + _PAYMENT_LINK_COLS + " FROM budget_payment_transactions WHERE transaction_id = ? ORDER BY id",
+        (txn_id,),
+    ).fetchall()
+    conn.close()
+    return [_payment_link_row(r) for r in rows]
+
+
+def get_linked_transaction_ids(kind, transaction_ids):
+    """Subset of transaction_ids already settling some payment of this kind."""
+    if not transaction_ids:
+        return set()
+    conn = db_conn()
+    placeholders = ", ".join("?" for _ in transaction_ids)
+    rows = conn.execute(
+        "SELECT transaction_id FROM budget_payment_transactions WHERE kind = ? AND transaction_id IN (" + placeholders + ")",
+        [kind, *transaction_ids],
+    ).fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def delete_payment_links(kind, payment_id):
+    conn = db_conn()
+    conn.execute("DELETE FROM budget_payment_transactions WHERE kind = ? AND payment_id = ?", (kind, payment_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_links_for_transaction(txn_id):
+    conn = db_conn()
+    conn.execute("DELETE FROM budget_payment_transactions WHERE transaction_id = ?", (txn_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_payment_by_id(kind, payment_id):
+    """Removes a bill/category payment row by its own id (the card goes
+    back to unpaid) along with any links still pointing at it."""
+    table = "budget_bill_payments" if kind == "bill" else "budget_category_payments"
+    conn = db_conn()
+    conn.execute("DELETE FROM budget_payment_transactions WHERE kind = ? AND payment_id = ?", (kind, payment_id))
+    conn.execute("DELETE FROM " + table + " WHERE id = ?", (payment_id,))
     conn.commit()
     conn.close()
 

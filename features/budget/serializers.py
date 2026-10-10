@@ -108,9 +108,13 @@ def camel_budget_breakdown(data: dict) -> dict:
             {
                 "categoryId": v.get("id"), "name": v["name"], "remaining": v["remaining"],
                 "spent": v["spent"], "overBudget": v["over_budget"], "paid": v.get("paid", False),
+                "limit": v.get("limit"),
             }
             for v in data["remaining_var"]
         ],
+        # Bills paid at a "this period only" amount: {billId: amount}.
+        # JSON object keys are strings, so the client reads them as such.
+        "billPeriodAmounts": {str(k): v for k, v in data.get("bill_period_amounts", {}).items()},
         "unmatchedSpending": [{"name": u["name"], "amount": u["amount"]} for u in data["unmatched_spending"]],
         "totalStillOwed": data["total_still_owed"],
         "totalVarRemaining": data["total_var_remaining"],

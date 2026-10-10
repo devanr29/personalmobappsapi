@@ -40,7 +40,7 @@ def _check_auth():
 
 @budget_bp.errorhandler(BudgetError)
 def _handle_budget_error(e):
-    return err(e.code, e.message, e.status)
+    return err(e.code, e.message, e.status, getattr(e, "details", None))
 
 
 @budget_bp.errorhandler(Exception)
@@ -230,9 +230,13 @@ def categories_delete(category_id):
 @budget_bp.route("/categories/<int:category_id>/pay", methods=["POST"])
 def categories_pay(category_id):
     body = request.get_json(silent=True) or {}
+    transaction_ids = body.get("transactionIds")
+    if transaction_ids is None and body.get("transactionId") is not None:
+        transaction_ids = [body["transactionId"]]
     txn, summary = service.pay_variable_category(
         category_id, wallet_id=body.get("walletId"), amount=body.get("amount"),
         occurred_at=body.get("occurredAt"), create_transaction=body.get("createTransaction", True),
+        transaction_ids=transaction_ids, amount_change=body.get("amountChange"),
     )
     return ok({"transaction": camel_transaction(txn) if txn else None, "summary": summary}, status=201)
 
@@ -290,9 +294,10 @@ def bills_pay(bill_id):
     body = request.get_json(silent=True) or {}
     txn, summary = service.pay_bill(
         bill_id, wallet_id=body.get("walletId"), amount=body.get("amount"), occurred_at=body.get("occurredAt"),
-        transaction_id=body.get("transactionId"),
+        transaction_id=body.get("transactionId"), transaction_ids=body.get("transactionIds"),
+        create_transaction=body.get("createTransaction", True), amount_change=body.get("amountChange"),
     )
-    return ok({"transaction": camel_transaction(txn), "summary": summary}, status=201)
+    return ok({"transaction": camel_transaction(txn) if txn else None, "summary": summary}, status=201)
 
 
 @budget_bp.route("/bills/<int:bill_id>/pay", methods=["DELETE"])

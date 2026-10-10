@@ -28,6 +28,17 @@ class BudgetConflict(BudgetError):
     status = 409
 
 
+class BudgetAmountMismatch(BudgetConflict):
+    """Attached transactions total something other than the card's amount
+    and the caller hasn't said what to do about it (amountChange). Carries
+    both numbers in .details so the client can ask the user."""
+    code = "AMOUNT_MISMATCH"
+
+    def __init__(self, message, total, amount):
+        super().__init__(message)
+        self.details = {"total": total, "amount": amount}
+
+
 # ================================================================
 # Wallet by BudgetBakers sync errors (features/budget/wallet/) — same
 # BudgetError base so the existing @budget_bp.errorhandler(BudgetError)
