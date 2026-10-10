@@ -48,7 +48,7 @@ def evaluate_alerts(*, now: datetime.datetime, prefs: dict, view: dict, period: 
             "kind": "daily_checkin",
             "ref_key": today_str,
             "title": "Daily budget check-in",
-            "body": f"{_fmt(view['daily_budget'])}/day left, {view['days_left']} days to payday.",
+            "body": f"{_fmt(view['daily_budget'])}/day left, {view['days_left']} days from tomorrow to payday.",
         })
 
     for bill in bills_due:

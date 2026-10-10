@@ -98,7 +98,7 @@ function BudgetBubble({ data }: { data: ChatBudgetData }) {
       <Stack>
         <Text variant="bodyStrong">💰 Budget Breakdown</Text>
         <Text variant="caption" tone="muted" style={{ marginTop: theme.spacing[0.5] }}>
-          {data.daysToPayday} days to payday
+          {data.daysToPayday} days from tomorrow
         </Text>
       </Stack>
 

@@ -57,7 +57,10 @@ def build_period_view(conn=None):
         period = ensure_current_period(get_payroll_day(), conn=conn)
         now = now_jkt().date()
         end = datetime.date.fromisoformat(period["end_date"])
-        days_left = max((end - now).days, 0)
+        # Days from tomorrow through the eve of payday: today's spend is
+        # already out of money_in_hand(), so the daily budget spreads what's
+        # left over the days still ahead (period end_date is payday itself).
+        days_left = max((end - now).days - 1, 0)
 
         bills = repo.get_bills(conn=conn)
         paid_bill_ids = repo.get_paid_bill_ids(period["id"], conn=conn)

@@ -409,7 +409,7 @@ function DailyBudgetHero({ summary }: { summary: BudgetSnapshot }) {
             </Text>
           </HStack>
           <Text variant="caption" tone="muted">
-            {summary.daysToPayday} days to payday
+            {summary.daysToPayday} days from tomorrow
           </Text>
         </HStack>
         <HStack align="baseline" gap={1.5}>

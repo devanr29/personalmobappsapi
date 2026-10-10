@@ -57,7 +57,7 @@ export function BudgetCard({ data, onSetup }: BudgetCardProps) {
             Daily budget
           </Text>
           <Text variant="caption" tone="muted">
-            {data.daysToPayday} days to payday
+            {data.daysToPayday} days from tomorrow
           </Text>
         </HStack>
         <HStack align="baseline" gap={1.5}>

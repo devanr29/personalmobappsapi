@@ -23,7 +23,7 @@ def format_budget_text(data: dict) -> str:
     daily_budget        = data["daily_budget"]
     days_left           = data["days_left"]
 
-    lines = [f"💰 *Budget Breakdown* — {days_left} days to payday (25th)\n"]
+    lines = [f"💰 *Budget Breakdown* — {days_left} days from tomorrow to payday (25th)\n"]
     lines.append(f"💵 Current money: *{fmt(remaining)}*\n")
 
     if still_owed or pending_amounts:
@@ -62,7 +62,7 @@ def format_budget_text(data: dict) -> str:
     for v in remaining_var:
         lines.append(f"    - {v['name']} (remaining): {fmt(v['remaining'])}")
     lines.append(f"  Free money left:    {fmt(free_money)}")
-    lines.append(f"  Days until payday:  {days_left} days\n")
+    lines.append(f"  Days left (from tomorrow):  {days_left} days\n")
 
     if daily_budget < 0:
         lines.append(f"⚠️ *You're short by {fmt(abs(free_money))}!*")

@@ -187,3 +187,30 @@ def test_paying_a_bill_removes_it_from_still_owed(budget_env):
     data = service.build_period_view()
     assert not any(e["name"] == "Internet" for e in data["still_owed"])
     assert data["total_still_owed"] == 0
+
+
+@pytest.mark.parametrize("today, expected_days", [
+    ("2026-10-11", 13),  # Oct 12 .. Oct 24 — payday (the 25th) excluded
+    ("2026-10-24", 0),   # payday eve: no days ahead, daily budget = free money
+    ("2026-09-25", 29),  # payday itself: Sep 26 .. Oct 24
+])
+def test_days_left_counts_from_tomorrow_to_payday_eve(budget_env, monkeypatch, today, expected_days):
+    """The daily budget spreads free money over the days from tomorrow
+    through the day before payday — today's spend is already out of the
+    balance, and payday brings new income."""
+    import datetime
+
+    import config
+    import features.budget.periods as periods_module
+
+    service, repo = budget_env
+    fake_now = datetime.datetime.combine(datetime.date.fromisoformat(today), datetime.time(9, 0))
+    monkeypatch.setattr(service, "now_jkt", lambda: fake_now)
+    monkeypatch.setattr(periods_module, "now_jkt", lambda: fake_now)
+    monkeypatch.setattr(config, "now_jkt", lambda: fake_now)
+    repo.create_wallet("Cash", opening_balance=1_300_000, is_default=True)
+
+    data = service.build_period_view()
+    assert data["days_left"] == expected_days
+    expected_daily = data["free_money"] / expected_days if expected_days else data["free_money"]
+    assert data["daily_budget"] == expected_daily
