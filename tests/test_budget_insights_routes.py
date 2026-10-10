@@ -174,6 +174,10 @@ def test_today_card_allowance_reconstructs_correctly(budget_env):
     repo.create_wallet("Cash", opening_balance=1_000_000, is_default=True)
     today = service.get_today_card()
     assert today["remainingToday"] == today["allowance"]  # no spend yet today
+    view = service.build_period_view()
+    if view["days_left"] > 0:
+        # Nothing spent today: today's allowance is the from-tomorrow daily budget.
+        assert today["allowance"] == round(view["daily_budget"])
 
 
 def test_today_card_next_bill_due(budget_env):

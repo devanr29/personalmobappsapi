@@ -172,6 +172,19 @@ def test_today_allowance_remaining_plus_spend_equals_allowance():
     assert result["remainingToday"] + 30_000 == result["allowance"]
 
 
+def test_today_allowance_equals_this_mornings_daily_budget():
+    # 13 days from tomorrow; 260k free now after 30k spent today, so this
+    # morning's daily budget was (260k + 30k) / 13.
+    result = insights.today_allowance(free_money=260_000, days_left=13, today_spend=30_000)
+    assert result["allowance"] == round(290_000 / 13)
+    assert result["remainingToday"] == round(290_000 / 13) - 30_000
+
+
+def test_today_allowance_matches_daily_budget_before_spending():
+    result = insights.today_allowance(free_money=260_000, days_left=13, today_spend=0)
+    assert result["allowance"] == 20_000  # == free_money / days_left
+
+
 def test_today_allowance_days_left_zero_still_divides_by_one():
     result = insights.today_allowance(free_money=100_000, days_left=0, today_spend=0)
     assert result["allowance"] == 100_000

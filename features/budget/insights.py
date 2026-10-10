@@ -122,12 +122,15 @@ def project_end_balance(*, money_in_hand: int, total_still_owed: int, cumulative
 
 
 def today_allowance(*, free_money: int, days_left: int, today_spend: int) -> dict:
-    """free_money already reflects today's spend (money_in_hand() is
-    live), so `free_money / days_left - today_spend` would double-count.
-    Reconstruct this morning's position instead: add back today's spend,
-    then divide across today + days_left (days_left itself does not
-    include today — see service.build_period_view)."""
-    days = max(days_left, 0) + 1
+    """Today's allowance is the daily budget as it stood this morning,
+    the same per-day figure the from-tomorrow budget showed before any of
+    today's spend. free_money already reflects today's spend
+    (money_in_hand() is live), so add it back, then divide by days_left
+    (tomorrow through payday eve, see service.build_period_view), the
+    same divisor compute._finalize uses. Spending today then lowers the
+    live daily_budget for the days still ahead, while today's allowance
+    stays fixed for the rest of the day."""
+    days = max(days_left, 1)
     start_of_day_free = free_money + today_spend
     allowance = round(start_of_day_free / days)
     return {"allowance": allowance, "remainingToday": allowance - today_spend}
