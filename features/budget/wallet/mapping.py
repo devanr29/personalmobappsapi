@@ -31,6 +31,11 @@ were removed with the push direction on 2026-08-31; `git log --
 features/budget/wallet/` has them.
 
 Restricted system category UUIDs, from docs/BUDGETBAKERS_API.md:"""
+import datetime
+from zoneinfo import ZoneInfo
+
+TZ_JKT = ZoneInfo("Asia/Jakarta")
+
 WALLET_DEBT_CATEGORY_ID = "5c5c4e20-00c8-8000-8000-000000000000"
 WALLET_TRANSFER_CATEGORY_ID = "5c5c4e21-00c8-8000-8000-000000000000"
 WALLET_SHOPPING_LIST_CATEGORY_ID = "5c5c4e22-00c8-8000-8000-000000000000"
@@ -145,6 +150,27 @@ def record_category_id(record: dict):
     return _embed_id(record.get("category"))
 
 
+def record_date_to_wib(value) -> str:
+    """Wallet sends recordDate as a UTC ISO instant ("...T10:30:00.000Z").
+    The ledger stores naive Asia/Jakarta "YYYY-MM-DD HH:MM" (see
+    service._normalize_occurred_at), so convert, not just strip the
+    suffix — stripping filed every synced record 7 hours early, and up to
+    a day early for anything recorded before 07:00 WIB. A value with no
+    offset is taken as already-WIB."""
+    if not value:
+        return ""
+    text = str(value).strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return text.replace("T", " ")[:16]
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(TZ_JKT).replace(tzinfo=None)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
 def record_to_transaction_fields(
     record: dict, *, category_id=None, category_remote_id=None, wallet_id=None, transfer_wallet_id=None,
 ) -> dict:
@@ -158,7 +184,7 @@ def record_to_transaction_fields(
     direction = "transfer" if transfer_wallet_id is not None else record_direction(record)
     amount = abs(record_amount_idr(record))
     return {
-        "occurred_at": (record.get("recordDate") or "").replace("T", " ")[:16],
+        "occurred_at": record_date_to_wib(record.get("recordDate")),
         "amount": amount,
         "direction": direction,
         "category_id": category_id,

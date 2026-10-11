@@ -376,8 +376,11 @@ def _pull_records(client, cursor, payroll_day, conn, apply=True, deadline=None) 
                     # only (see _TXN_LIST_SQL), so refreshing it can't undo
                     # a local filing decision the way overwriting category_id
                     # would.
+                    # period_id follows occurred_at: a corrected date can
+                    # land in a different payroll period.
+                    period_id = _period_id_for(fields["occurred_at"], payroll_day, conn, cache=period_cache)
                     repo.update_transaction(
-                        link["local_id"], conn=conn,
+                        link["local_id"], conn=conn, period_id=period_id,
                         occurred_at=fields["occurred_at"], amount=fields["amount"],
                         direction=fields["direction"], wallet_id=fields["wallet_id"],
                         note=fields["note"], wallet_category_remote_id=fields["wallet_category_remote_id"],

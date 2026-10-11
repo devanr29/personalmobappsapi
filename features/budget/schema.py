@@ -5,6 +5,8 @@ feature the silent owner of a shared SQLite counter.
 All statements are idempotent (CREATE TABLE IF NOT EXISTS / CREATE INDEX IF
 NOT EXISTS) so re-running a partially-applied migration step is safe.
 """
+import json
+
 from database import state_get, state_set
 from db import db_conn, IS_PG
 
@@ -341,10 +343,29 @@ def _migration_6():
     ]
 
 
+def _migration_7():
+    """Wallet records used to be stored with recordDate's UTC "Z" stripped
+    instead of converted, so every synced transaction sits 7 hours early
+    (wallet/mapping.py's record_date_to_wib now converts). Dropping the
+    records watermark makes the next sync re-pull full history, and the
+    update path rewrites occurred_at and period_id. Category and bill
+    filings are never touched by a pull, so they survive."""
+    def _reset_record_cursor(conn):
+        raw = state_get("wallet_sync_cursors")
+        if not raw:
+            return
+        cursors = json.loads(raw)
+        for key in ("record", "record_offset", "record_running_max"):
+            cursors.pop(key, None)
+        state_set("wallet_sync_cursors", json.dumps(cursors))
+
+    return [_reset_record_cursor]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
 MIGRATIONS = [
     _migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4(), _migration_5(),
-    _migration_6(),
+    _migration_6(), _migration_7(),
 ]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 

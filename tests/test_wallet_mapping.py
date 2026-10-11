@@ -31,7 +31,7 @@ def test_record_to_transaction_fields_amount_is_always_positive():
     fields = mapping.record_to_transaction_fields(record, category_id=5, wallet_id=1)
     assert fields["amount"] == 75000
     assert fields["direction"] == "expense"
-    assert fields["occurred_at"] == "2026-08-01 10:30"
+    assert fields["occurred_at"] == "2026-08-01 17:30"  # 10:30Z -> WIB
     assert fields["wallet_id"] == 1
     assert fields["category_id"] == 5
     assert fields["source"] == "wallet"
@@ -121,3 +121,11 @@ def test_account_to_wallet_fields_reads_current_balance():
 
 def test_account_to_wallet_fields_missing_current_balance_is_none():
     assert mapping.account_to_wallet_fields({"name": "X", "accountType": "Cash"})["wallet_balance"] is None
+
+
+def test_record_date_is_converted_from_utc_to_wib():
+    # 20:00Z is 03:00 WIB the next day — the date must roll over too.
+    assert mapping.record_date_to_wib("2026-08-01T20:00:00.000Z") == "2026-08-02 03:00"
+    assert mapping.record_date_to_wib("2026-08-01T10:30:00+07:00") == "2026-08-01 10:30"
+    assert mapping.record_date_to_wib("2026-08-01T10:30:00") == "2026-08-01 10:30"
+    assert mapping.record_date_to_wib(None) == ""
