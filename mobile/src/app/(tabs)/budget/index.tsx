@@ -15,7 +15,7 @@ import { useBudgetRevision } from "@/features/budget/BudgetProvider";
 import {
   createTransaction, getBreakdown, listBills, listCategories, payBill, payCategory, snapshotFromBreakdown, unpayBill, unpayCategory,
 } from "@/features/budget/api";
-import { AttachTransactionSheet, type AttachTarget } from "@/features/budget/components/AttachTransactionSheet";
+import { AttachTransactionSheet, type AttachMode, type AttachTarget } from "@/features/budget/components/AttachTransactionSheet";
 import { BudgetItemSheet } from "@/features/budget/components/BudgetItemSheet";
 import { FixedBudgetCard } from "@/features/budget/components/FixedBudgetCard";
 import { MarkPaidSheet } from "@/features/budget/components/MarkPaidSheet";
@@ -70,6 +70,7 @@ export default function BudgetOverviewScreen() {
   const [payPendingBillId, setPayPendingBillId] = useState<number | null>(null);
   const [payPendingCategoryId, setPayPendingCategoryId] = useState<number | null>(null);
   const [attachTarget, setAttachTarget] = useState<AttachTarget | null>(null);
+  const [attachMode, setAttachMode] = useState<AttachMode>("pay");
   const [markPaidTarget, setMarkPaidTarget] = useState<AttachTarget | null>(null);
 
   const fetcher = useCallback(async (): Promise<OverviewResource> => {
@@ -88,6 +89,11 @@ export default function BudgetOverviewScreen() {
     kind: "category", id: item.categoryId as number, name: item.name,
     amount: item.limit ?? item.remaining + item.spent - item.overBudget, spent: item.spent,
   });
+
+  const openAttach = (target: AttachTarget, mode: AttachMode) => {
+    setAttachMode(mode);
+    setAttachTarget(target);
+  };
 
   // Marking paid asks how first (MarkPaidSheet); un-marking a paid card
   // happens straight away, as before.
@@ -269,7 +275,7 @@ export default function BudgetOverviewScreen() {
                       onEdit={() => setBudgetSheet({ itemKind: "bill", editing: bill })}
                       onTogglePaid={() => handleTogglePaid(bill, !stillOwedBillIds.has(bill.id))}
                       onPayAmount={(amount, walletId) => handlePayAmount(bill, amount, walletId)}
-                      onAttachTransaction={() => setAttachTarget(billTarget(bill))}
+                      onAttachTransaction={() => openAttach(billTarget(bill), "pay")}
                     />
                   ))}
                 </CollapsibleSection>
@@ -297,7 +303,7 @@ export default function BudgetOverviewScreen() {
                           if (category) setBudgetSheet({ itemKind: "category", editing: category });
                         }}
                         onLogSpend={(amount, walletId) => handleLogSpend(item.categoryId as number, amount, walletId)}
-                        onAttachTransaction={() => setAttachTarget(categoryTarget(item))}
+                        onAttachSpend={() => openAttach(categoryTarget(item), "spend")}
                         onTogglePaid={() => handleToggleCategoryPaid(item)}
                         onPayAmount={(amount, walletId, createTransactionFlag) =>
                           handlePayCategoryAmount(item.categoryId as number, amount, walletId, createTransactionFlag)
@@ -326,7 +332,7 @@ export default function BudgetOverviewScreen() {
         onClose={() => setMarkPaidTarget(null)}
         onPaid={handleSaved}
         onChooseAttach={() => {
-          setAttachTarget(markPaidTarget);
+          if (markPaidTarget) openAttach(markPaidTarget, "pay");
           setMarkPaidTarget(null);
         }}
         target={markPaidTarget ?? EMPTY_TARGET}
@@ -336,6 +342,7 @@ export default function BudgetOverviewScreen() {
         onClose={() => setAttachTarget(null)}
         onAttached={handleSaved}
         target={attachTarget ?? EMPTY_TARGET}
+        mode={attachMode}
       />
     </SafeAreaView>
   );

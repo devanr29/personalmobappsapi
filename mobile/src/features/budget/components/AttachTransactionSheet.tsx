@@ -8,7 +8,7 @@ import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatRupiah } from "@/utils/currency";
-import { listTransactions, payBill, payCategory, type PayInput } from "../api";
+import { attachCategorySpend, listTransactions, payBill, payCategory, type PayInput } from "../api";
 import type { Transaction } from "../types";
 import { formatBudgetDayHeader } from "../utils/budgetDate";
 
@@ -19,12 +19,18 @@ export type AttachTarget =
   | { kind: "category"; id: number; name: string; amount: number; spent: number }
   | { kind: "bill"; id: number; name: string; amount: number };
 
+/** "pay" settles the item with the picked expenses (marks it paid, with the
+ * amount check); "spend" — categories only — just files them under it as
+ * this period's spend, so its remaining drops and it stays unpaid. */
+export type AttachMode = "pay" | "spend";
+
 export type AttachTransactionSheetProps = {
   visible: boolean;
   onClose: () => void;
-  /** Fired after the item is successfully marked paid. */
+  /** Fired after the expenses are successfully attached. */
   onAttached: () => void;
   target: AttachTarget;
+  mode?: AttachMode;
 };
 
 const CANDIDATE_LIMIT = 25;
@@ -44,9 +50,15 @@ type AmountQuestion = { step: "change" | "scope"; total: number; amount: number 
  * AMOUNT_MISMATCH when they differ. The sheet then asks "Change the
  * amount?": No leaves the item unpaid, Yes asks "this period only" vs
  * "permanently" and resubmits with amountChange. The questions are shown
- * in the sheet rather than via Alert.alert, which is a no-op on web. */
-export function AttachTransactionSheet({ visible, onClose, onAttached, target }: AttachTransactionSheetProps) {
+ * in the sheet rather than via Alert.alert, which is a no-op on web.
+ *
+ * In "spend" mode (a variable card's "Log spend" section) the picked
+ * expenses are only re-filed under the category (POST
+ * /categories/:id/spend): no payment, no question — e.g. a 40.000 limit
+ * with a 20.000 expense attached reads 20.000 left. */
+export function AttachTransactionSheet({ visible, onClose, onAttached, target, mode = "pay" }: AttachTransactionSheetProps) {
   const theme = useTheme();
+  const spendMode = mode === "spend" && target.kind === "category";
   const [items, setItems] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +71,7 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
   // target) — a render-phase adjustment keyed on session identity, the
   // same pattern TransactionSheet uses, so it doesn't cascade the way a
   // synchronous setState in the effect body would.
-  const sessionKey = visible ? `${target.kind}:${target.id}` : null;
+  const sessionKey = visible ? `${mode}:${target.kind}:${target.id}` : null;
   const [openFor, setOpenFor] = useState<string | null>(null);
   if (sessionKey !== null && openFor !== sessionKey) {
     setOpenFor(sessionKey);
@@ -80,7 +92,8 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
     let cancelled = false;
     listTransactions({ direction: "expense", limit: CANDIDATE_LIMIT })
       .then((page) => {
-        if (!cancelled) setItems(page.items);
+        // Expenses already filed under the category add nothing as spend.
+        if (!cancelled) setItems(spendMode ? page.items.filter((t) => t.categoryId !== target.id) : page.items);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "Couldn't load transactions.");
@@ -91,7 +104,7 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
     return () => {
       cancelled = true;
     };
-  }, [visible, target.kind, target.id]);
+  }, [visible, target.kind, target.id, spendMode]);
 
   const toggle = (id: number) => {
     setNotice(null);
@@ -119,7 +132,9 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
     setNotice(null);
     const input: PayInput = { transactionIds: selected.map((t) => t.id), amountChange };
     try {
-      if (target.kind === "category") {
+      if (spendMode) {
+        await attachCategorySpend(target.id, input.transactionIds ?? []);
+      } else if (target.kind === "category") {
         await payCategory(target.id, input);
       } else {
         await payBill(target.id, input);
@@ -137,7 +152,8 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
         });
       } else {
         setQuestion(null);
-        setError(err instanceof ApiError ? err.message : "Couldn't mark as paid — check your connection and try again.");
+        const fallback = spendMode ? "Couldn't add to spend" : "Couldn't mark as paid";
+        setError(err instanceof ApiError ? err.message : `${fallback} — check your connection and try again.`);
       }
     } finally {
       setSubmitting(false);
@@ -149,8 +165,9 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
     setNotice(`Not marked as paid — ${target.name} is unchanged.`);
   };
 
-  const subtitle =
-    target.kind === "category"
+  const subtitle = spendMode
+    ? `Pick expenses you've already recorded that belong to ${target.name} — they're filed under it and count toward this period's spend, without marking it paid.`
+    : target.kind === "category"
       ? `Pick the expenses that belong to ${target.name} — they're filed under it and the budget is marked paid, without adding new entries.`
       : `Pick the expenses that paid ${target.name} — they settle the bill for this period without logging a duplicate.`;
   const amountLabel = target.kind === "category" ? "limit" : "amount";
@@ -164,7 +181,7 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
         >
           <Stack p={4} gap={3}>
             <Stack gap={1}>
-              <Text variant="heading">Attach transactions</Text>
+              <Text variant="heading">{spendMode ? "Add to spend" : "Attach transactions"}</Text>
               <Text variant="caption" tone="muted">
                 {subtitle}
               </Text>
@@ -267,8 +284,13 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
 
             <HStack align="center" justify="space-between" gap={3}>
               <Text variant="caption" tone="muted" numeric style={{ flex: 1 }}>
-                {selected.length} selected · {formatRupiah(previewTotal)}
-                {target.kind === "category" ? " spent" : ""} vs {formatRupiah(target.amount)}
+                {spendMode
+                  ? `${selected.length} selected · ${formatRupiah(previewTotal)} of ${formatRupiah(target.amount)} · ${
+                      previewTotal > target.amount
+                        ? `over by ${formatRupiah(previewTotal - target.amount)}`
+                        : `${formatRupiah(target.amount - previewTotal)} left`
+                    }`
+                  : `${selected.length} selected · ${formatRupiah(previewTotal)}${target.kind === "category" ? " spent" : ""} vs ${formatRupiah(target.amount)}`}
               </Text>
               <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
                 <Box py={2} px={3}>
@@ -279,7 +301,7 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target }:
               </Pressable>
               {question === null ? (
                 <SheetButton
-                  label="Attach & mark paid"
+                  label={spendMode ? "Add to spend" : "Attach & mark paid"}
                   primary
                   pending={submitting}
                   disabled={selected.length === 0 || submitting}

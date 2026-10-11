@@ -241,6 +241,13 @@ def categories_pay(category_id):
     return ok({"transaction": camel_transaction(txn) if txn else None, "summary": summary}, status=201)
 
 
+@budget_bp.route("/categories/<int:category_id>/spend", methods=["POST"])
+def categories_attach_spend(category_id):
+    body = request.get_json(silent=True) or {}
+    txns, summary = service.attach_spend_to_category(category_id, body.get("transactionIds"))
+    return ok({"transactions": [camel_transaction(t) for t in txns], "summary": summary}, status=201)
+
+
 @budget_bp.route("/categories/<int:category_id>/pay", methods=["DELETE"])
 def categories_unpay(category_id):
     category, summary = service.unpay_variable_category(category_id)

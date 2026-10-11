@@ -119,6 +119,16 @@ export function payCategory(id: number, input?: PayInput) {
   );
 }
 
+/** Files expenses already in the ledger under a variable category as this
+ * period's spend — the card's remaining drops, it isn't marked paid, and
+ * there's no amount check. */
+export function attachCategorySpend(id: number, transactionIds: number[]) {
+  return apiClient.post<{ transactions: Transaction[]; summary: BudgetSnapshot | null }>(
+    `/api/budget/categories/${id}/spend`,
+    { transactionIds },
+  );
+}
+
 export function unpayCategory(id: number) {
   return apiClient.delete<{ category: Category; summary: BudgetSnapshot | null }>(`/api/budget/categories/${id}/pay`);
 }

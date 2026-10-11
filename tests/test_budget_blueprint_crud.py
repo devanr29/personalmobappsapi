@@ -360,3 +360,39 @@ def test_alerts_mark_read_route(client, auth_headers):
     resp = client.post("/api/budget/alerts/999999/read", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.get_json()["data"]["read"] is True
+
+
+def test_category_attach_spend_route(client, auth_headers):
+    wallet = repo.create_wallet("_HttpSpendWallet", opening_balance=500_000, is_default=False)
+    category = repo.create_category("_HttpCategorySpend", "variable", monthly_limit=40_000)
+    txn = None
+    try:
+        resp = client.post(
+            "/api/budget/transactions", headers=auth_headers,
+            json={"amount": 20_000, "direction": "expense", "walletId": wallet["id"]},
+        )
+        assert resp.status_code == 201
+        txn = resp.get_json()["data"]["transaction"]
+
+        resp = client.post(
+            f"/api/budget/categories/{category['id']}/spend", headers=auth_headers,
+            json={"transactionIds": [txn["id"]]},
+        )
+        assert resp.status_code == 201
+        data = resp.get_json()["data"]
+        assert [t["id"] for t in data["transactions"]] == [txn["id"]]
+        assert data["transactions"][0]["categoryId"] == category["id"]
+        assert "summary" in data
+
+        resp = client.post(
+            f"/api/budget/categories/{category['id']}/spend", headers=auth_headers, json={},
+        )
+        assert resp.status_code == 400
+    finally:
+        conn = _teardown_conn()
+        if txn is not None:
+            conn.execute("DELETE FROM budget_transactions WHERE id = ?", (txn["id"],))
+        conn.execute("DELETE FROM budget_categories WHERE id = ?", (category["id"],))
+        conn.execute("DELETE FROM budget_wallets WHERE id = ?", (wallet["id"],))
+        conn.commit()
+        conn.close()

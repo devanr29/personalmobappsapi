@@ -565,6 +565,47 @@ def pay_variable_category(category_id, wallet_id=None, amount=None, occurred_at=
     return txn, get_summary()
 
 
+def attach_spend_to_category(category_id, transaction_ids):
+    """Files expenses already in the ledger under a variable category as
+    this period's spend — the "Log spend" counterpart of attaching on
+    mark-as-paid. Nothing is created and no balance moves: re-filing
+    category_id is enough, since the card's remaining is monthly_limit
+    minus current-period spend. The card stays unpaid and there's no
+    amount check — going over the limit just reads "Over by".
+
+    Expenses from another period are rejected (they'd never count toward
+    this one), as are ones already settling a bill or category payment —
+    re-filing those would quietly break the card they back."""
+    category = repo.get_category(category_id)
+    if category is None:
+        raise BudgetNotFound(f"No category with id {category_id}.")
+    if category["kind"] != "variable":
+        raise BudgetValidationError("Only variable-budget categories can take attached spend.")
+    ids = _resolve_transaction_ids(transaction_ids, None)
+    if ids is None:
+        raise BudgetValidationError("transactionIds is required.")
+
+    period = ensure_current_period(get_payroll_day())
+    txns = []
+    for txn_id in ids:
+        txn = repo.get_transaction(txn_id)
+        if txn is None or txn["deleted_at"] is not None:
+            raise BudgetNotFound(f"No transaction with id {txn_id}.")
+        if txn["direction"] != "expense":
+            raise BudgetValidationError("Only expenses can count as budget spend.")
+        if txn["period_id"] != period["id"]:
+            raise BudgetValidationError("Only expenses from this pay period can count toward its budget.")
+        txns.append(txn)
+
+    if repo.get_linked_transaction_ids("category", ids) or repo.get_linked_transaction_ids("bill", ids):
+        raise BudgetConflict("A selected transaction already settles a bill or budget category.")
+
+    for txn in txns:
+        if txn["category_id"] != category_id:
+            repo.update_transaction(txn["id"], category_id=category_id)
+    return [repo.get_transaction(t["id"]) for t in txns], get_summary()
+
+
 def unpay_variable_category(category_id):
     category = repo.get_category(category_id)
     if category is None:

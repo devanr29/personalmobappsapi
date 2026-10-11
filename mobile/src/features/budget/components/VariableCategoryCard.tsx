@@ -17,10 +17,11 @@ export type VariableCategoryCardProps = {
   payPending: boolean;
   onEdit: () => void;
   onLogSpend: (amount: number, walletId: number) => Promise<void>;
-  /** Opens the picker for settling this category with expenses already in
-   * the ledger (money spent but never attributed to the budget): they're
-   * re-filed under it and the card is marked paid. */
-  onAttachTransaction: () => void;
+  /** Opens the picker for counting expenses already in the ledger (money
+   * spent but never attributed to the budget) as this category's spend:
+   * they're re-filed under it and `remaining` drops, without marking it
+   * paid. Settling the card with them lives under "Mark as paid". */
+  onAttachSpend: () => void;
   onTogglePaid: () => void;
   onPayAmount: (amount: number, walletId: number, createTransaction: boolean) => Promise<void>;
 };
@@ -33,7 +34,9 @@ export type VariableCategoryCardProps = {
  * breakdown fetch folds straight into total_var_remaining -> free_money ->
  * dailyBudget, so there's no separate "apply" step. Logging spend via
  * SpendInputRow posts a real expense transaction against this category,
- * which reduces `remaining` the same way any other spend does.
+ * which reduces `remaining` the same way any other spend does; "Add
+ * existing transactions" below it does the same with expenses that are
+ * already recorded, re-filing them instead of logging duplicates.
  *
  * "Mark as paid" is a separate declaration from logging spend — it mirrors
  * FixedBudgetCard's bill toggle (see service.pay_variable_category):
@@ -43,7 +46,7 @@ export type VariableCategoryCardProps = {
  * left, or attach existing expenses. The "Pay a different amount" row's
  * "Record as transaction" switch makes the same choice for a custom
  * amount. */
-export function VariableCategoryCard({ item, category, wallets, payPending, onEdit, onLogSpend, onAttachTransaction, onTogglePaid, onPayAmount }: VariableCategoryCardProps) {
+export function VariableCategoryCard({ item, category, wallets, payPending, onEdit, onLogSpend, onAttachSpend, onTogglePaid, onPayAmount }: VariableCategoryCardProps) {
   const theme = useTheme();
   const limit = item.limit ?? category?.monthlyLimit ?? item.remaining + item.spent - item.overBudget;
   const progress = limit > 0 ? clamp01(item.spent / limit) : 0;
@@ -105,20 +108,18 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
               wallets={wallets}
               onSubmit={(amount, walletId) => onLogSpend(amount, walletId)}
             />
-            {!item.paid ? (
-              <PressableScale
-                onPress={onAttachTransaction}
-                accessibilityRole="button"
-                accessibilityLabel={`Attach existing transactions to ${item.name}`}
-              >
-                <HStack align="center" gap={1.5}>
-                  <Paperclip size={14} color={theme.colors.accent} />
-                  <Text variant="caption" tone="accent">
-                    Attach existing transactions
-                  </Text>
-                </HStack>
-              </PressableScale>
-            ) : null}
+            <PressableScale
+              onPress={onAttachSpend}
+              accessibilityRole="button"
+              accessibilityLabel={`Add existing transactions to ${item.name}'s spend`}
+            >
+              <HStack align="center" gap={1.5}>
+                <Paperclip size={14} color={theme.colors.accent} />
+                <Text variant="caption" tone="accent">
+                  Add existing transactions
+                </Text>
+              </HStack>
+            </PressableScale>
           </>
         ) : null}
         <PressableScale onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${item.name}`}>
