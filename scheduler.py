@@ -15,6 +15,7 @@ def register_jobs():
     from features.reminders import check_and_send_reminders
     from features.quotes import send_scheduled_quote
     from features.budget.alerts import run_budget_alerts
+    from features.budget.ai.summary import run_weekly_digest
 
     # 5 min rather than 1: a reminder firing up to 4 minutes later than its
     # exact time is not user-visible, and this job was the single largest
@@ -25,6 +26,11 @@ def register_jobs():
     # user-editable at runtime via PATCH /api/budget/alerts/prefs, and a
     # registered cron trigger would go stale the moment someone changed it.
     scheduler.add_job(run_budget_alerts, "interval", minutes=15, id="budget_alerts")
+
+    # Weekly AI digest, Sunday 19:00 WIB. A fixed cron is fine here (unlike
+    # the alerts job above) — its only pref is an on/off switch, checked
+    # at fire time; the ISO-week ref_key dedupes a double fire.
+    scheduler.add_job(run_weekly_digest, "cron", day_of_week="sun", hour=19, minute=0, id="budget_weekly_digest")
 
     # Quote push every 3 hours (Asia/Jakarta): 00, 03, 06, … 21.
     # The notification title is picked from the hour at fire time.

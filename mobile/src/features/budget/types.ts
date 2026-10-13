@@ -366,7 +366,14 @@ export interface Goal {
 // ================================================================
 // ALERTS
 // ================================================================
-export type AlertKind = "daily_checkin" | "bill_due" | "over_budget" | "low_daily_budget" | "period_rollover";
+export type AlertKind =
+  | "daily_checkin"
+  | "bill_due"
+  | "over_budget"
+  | "low_daily_budget"
+  | "period_rollover"
+  | "category_spike"
+  | "weekly_digest";
 
 export interface Alert {
   id: number;
@@ -385,6 +392,36 @@ export interface AlertPrefs {
   overBudgetEnabled: boolean;
   overBudgetThresholdPct: number;
   lowDailyBudgetThreshold: number;
+  anomalyEnabled: boolean;
+  weeklyDigestEnabled: boolean;
+}
+
+// ================================================================
+// AI — mirrors features/budget/ai/. Every figure in `bullets`/`answer`
+// is checked server-side against `facts`; source "rules" means the model
+// was unavailable or ungrounded and the facts' own text is shown instead.
+// ================================================================
+export type AiFactTone = "good" | "watch" | "bad" | "info";
+
+export interface AiFact {
+  key: string;
+  text: string;
+  tone?: AiFactTone;
+  severity?: number;
+}
+
+export interface AiInsights {
+  bullets: string[];
+  facts: AiFact[];
+  generatedAt: string;
+  source: "ai" | "rules";
+}
+
+export interface AiAnswer {
+  answer: string;
+  query: { query: string; category: string | null; amount: number | null };
+  facts: AiFact[];
+  source: "ai" | "rules";
 }
 
 // ================================================================

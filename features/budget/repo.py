@@ -700,7 +700,8 @@ def ensure_alert_prefs():
 
 _ALERT_PREFS_COLS = (
     "daily_checkin_enabled, daily_checkin_time, bill_due_lead_days, "
-    "over_budget_enabled, over_budget_threshold_pct, low_daily_budget_threshold, updated_at"
+    "over_budget_enabled, over_budget_threshold_pct, low_daily_budget_threshold, updated_at, "
+    "anomaly_enabled, weekly_digest_enabled"
 )
 
 
@@ -713,15 +714,16 @@ def get_alert_prefs():
         "daily_checkin_enabled": bool(row[0]), "daily_checkin_time": row[1],
         "bill_due_lead_days": row[2], "over_budget_enabled": bool(row[3]),
         "over_budget_threshold_pct": row[4], "low_daily_budget_threshold": row[5],
-        "updated_at": row[6],
+        "updated_at": row[6], "anomaly_enabled": bool(row[7]), "weekly_digest_enabled": bool(row[8]),
     }
 
 
 _ALERT_PREFS_UPDATABLE = {
     "daily_checkin_enabled", "daily_checkin_time", "bill_due_lead_days",
     "over_budget_enabled", "over_budget_threshold_pct", "low_daily_budget_threshold",
+    "anomaly_enabled", "weekly_digest_enabled",
 }
-_ALERT_PREFS_BOOL_FIELDS = {"daily_checkin_enabled", "over_budget_enabled"}
+_ALERT_PREFS_BOOL_FIELDS = {"daily_checkin_enabled", "over_budget_enabled", "anomaly_enabled", "weekly_digest_enabled"}
 
 
 def update_alert_prefs(**fields):

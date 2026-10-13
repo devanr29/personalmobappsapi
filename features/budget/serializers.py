@@ -79,6 +79,7 @@ def camel_alert_prefs(p: dict) -> dict:
         "billDueLeadDays": p["bill_due_lead_days"], "overBudgetEnabled": p["over_budget_enabled"],
         "overBudgetThresholdPct": p["over_budget_threshold_pct"],
         "lowDailyBudgetThreshold": p["low_daily_budget_threshold"],
+        "anomalyEnabled": p["anomaly_enabled"], "weeklyDigestEnabled": p["weekly_digest_enabled"],
     }
 
 

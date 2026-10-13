@@ -14,6 +14,7 @@ from features.news import get_news
 from features.quotes import generate_daily_quote
 from features.budget import service as budget_service
 from features.budget.chat_view import build_chat_budget_payload
+from features.budget.ai import qa as budget_qa
 from features.memory import semantic_search
 from tracer import trace
 
@@ -153,6 +154,15 @@ def route_intent(intent: str, params: dict, incoming: str) -> dict:
                 "setup to add your wallets, categories and bills."
             )
         return build_chat_budget_payload(data)
+
+    elif intent == "budget_question":
+        result = budget_qa.answer(incoming)
+        if result is None:
+            return _text(
+                "💰 Your budget isn't set up yet. Open the Budget tab and run "
+                "setup to add your wallets, categories and bills."
+            )
+        return _text(result["answer"])
 
     elif intent == "delete_note":
         idx = params.get("index")

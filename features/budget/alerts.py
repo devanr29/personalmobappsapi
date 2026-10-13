@@ -13,6 +13,7 @@ from config import now_jkt
 from database import state_get
 from db import integrity_errors
 from features.budget import repo
+from features.budget.ai.facts import category_spikes, fmt_rp
 
 
 def _days_until_due_day(today: datetime.date, due_day: int) -> int:
@@ -30,8 +31,7 @@ def _days_until_due_day(today: datetime.date, due_day: int) -> int:
     return (days_in_this_month - today.day) + clamped_due_day
 
 
-def _fmt(n: int) -> str:
-    return f"Rp {int(n):,}".replace(",", ".")
+_fmt = fmt_rp
 
 
 def evaluate_alerts(*, now: datetime.datetime, prefs: dict, view: dict, period: dict,
@@ -88,11 +88,37 @@ def evaluate_alerts(*, now: datetime.datetime, prefs: dict, view: dict, period: 
     return alerts
 
 
+def evaluate_anomalies(*, prefs: dict, period: dict, spikes: list) -> list:
+    """category_spike alerts from facts.category_spikes() output. Pure,
+    like evaluate_alerts(). One per category per period — a category that
+    keeps climbing after its first spike alert is already on the user's
+    radar, and the over_budget alert still covers the limit itself."""
+    if not prefs.get("anomaly_enabled"):
+        return []
+    return [
+        {
+            "kind": "category_spike",
+            "ref_key": f"cat:{s['categoryId']}:period:{period['id']}:spike",
+            "title": f"{s['name']} spending is unusually high",
+            "body": f"{_fmt(s['spend'])} so far vs a usual {_fmt(s['expected'])} by this point ({s['ratio']}x normal).",
+        }
+        for s in spikes
+    ]
+
+
+def _period_progress(period: dict, today: datetime.date) -> tuple:
+    """(elapsed_days, total_days), same clamping as service.build_insights."""
+    start = datetime.date.fromisoformat(period["start_date"])
+    end = datetime.date.fromisoformat(period["end_date"])
+    through = max(min(today, end - datetime.timedelta(days=1)), start)
+    return (through - start).days + 1, max((end - start).days, 1)
+
+
 def run_budget_alerts(now=None) -> list:
     """Orchestration: gather live data, evaluate, dedupe, deliver
     (best-effort push), log. Returns the alerts that were newly logged
     this run (already-seen ref_keys are silently skipped, not returned)."""
-    from features.budget.service import build_period_view, get_payroll_day
+    from features.budget.service import build_category_patterns, build_period_view, get_payroll_day
     from features.budget.periods import ensure_current_period
     from push import send_push_notification
 
@@ -115,6 +141,12 @@ def run_budget_alerts(now=None) -> list:
 
     candidates = evaluate_alerts(now=now, prefs=prefs, view=view, period=period,
                                  bills_due=bills_due, category_status=category_status)
+    if prefs["anomaly_enabled"]:
+        elapsed_days, total_days = _period_progress(period, now.date())
+        spend = [{"categoryId": r["category_id"], "name": r["name"] or "Uncategorized", "spend": r["spend"]}
+                 for r in spend_rows]
+        spikes = category_spikes(spend, build_category_patterns(months=6), elapsed_days, total_days)
+        candidates += evaluate_anomalies(prefs=prefs, period=period, spikes=spikes)
 
     fired = []
     for alert in candidates:

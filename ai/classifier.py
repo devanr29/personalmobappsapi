@@ -24,6 +24,7 @@ Classify the user's message into exactly ONE of these intents:
   search_memory — ask about something that might be in their notes/ideas
   quote         — ask for a motivational/inspirational quote (e.g. "give me a quote", "motivate me", "quote of the day", "inspire me")
   budget        — ASK about the current budget state: how much money is left, how much per day, what's still owed, how many days to payday / sisa uang / berapa sisa per hari / sisa budget. Read-only — the assistant reports live numbers from the budget ledger and never records or changes anything. Managing wallets, categories, bills, or transactions happens only in the Budget tab, not via chat.
+  budget_question — ANALYZE the user's own budget data: comparisons, breakdowns, trends, what-ifs, "can I afford X", "how much did I spend on food", "food vs last month", "where is my money going", "biggest expenses", "how am I doing this month", "berapa pengeluaran makan bulan ini". Read-only, answered from the ledger.
   delete_note   — DELETE or REMOVE a saved note by number or keyword (e.g. "delete note 2", "hapus note fix the logs")
   edit_note     — EDIT or UPDATE the content of a saved note (e.g. "edit note 2 to ...", "update note fix to ...")
   delete_idea   — DELETE or REMOVE a saved idea by number or keyword
@@ -45,6 +46,8 @@ KEY DISAMBIGUATION RULES (apply these before classifying):
 - The word "remind" alone does NOT mean intent=reminder. Look at the full sentence structure.
 - "how to budget" / "tips for budgeting" / "how to spend daily budget wisely" / any advice or how-to question about money → chat (NOT budget). The budget intent is for reporting the user's own current numbers, not general advice.
 - "how to spend my daily budget wisely?" → chat (advice question, not a status check)
+- "how much is left?" / "sisa uang?" / "daily budget?" → budget (plain current-state report)
+- A question about the user's OWN spending history, a category, a comparison, or affordability of a specific amount → budget_question (e.g. "how much did I spend on food?", "can I afford 500k?", "am I spending more than last month?")
 - "delete/remove/hapus note/idea/task/event/reminder X" → delete_* intent (not complete_task)
 - "edit/update/change/ubah note/idea/task/event/reminder X to/with Y" → edit_* intent
 - "delete task X" → delete_task (permanently remove), NOT complete_task (which marks done)

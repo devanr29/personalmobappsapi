@@ -8,6 +8,7 @@ from api_common import ok, err, add_cors_headers, check_auth, handle_unexpected_
 from config import now_jkt
 from db import db_conn
 from features.budget import repo, service
+from features.budget.ai import qa as ai_qa, summary as ai_summary
 from features.budget.errors import BudgetError
 from features.budget.serializers import (
     camel_alert, camel_alert_prefs, camel_bill, camel_budget_breakdown, camel_category, camel_goal,
@@ -105,6 +106,28 @@ def insights_history():
     if group_by not in ("period", "month"):
         return err("VALIDATION_ERROR", "groupBy must be 'period' or 'month'.", 400)
     return ok(service.build_insights_history(periods=periods, group_by=group_by))
+
+
+@budget_bp.route("/insights/ai", methods=["GET"])
+def insights_ai():
+    """Cached per set of facts (features/budget/ai/summary.py); ?refresh=1
+    bypasses the cache and asks the model again."""
+    return ok(ai_summary.build_ai_summary(refresh=bool(request.args.get("refresh"))))
+
+
+_MAX_QUESTION_CHARS = 500
+
+
+@budget_bp.route("/ask", methods=["POST"])
+def ask():
+    """Read-only Q&A over the ledger — see features/budget/ai/qa.py."""
+    body = request.get_json(silent=True) or {}
+    question = body.get("question")
+    if not isinstance(question, str) or not question.strip():
+        return err("VALIDATION_ERROR", "question is required.", 400)
+    if len(question) > _MAX_QUESTION_CHARS:
+        return err("VALIDATION_ERROR", f"question must be at most {_MAX_QUESTION_CHARS} characters.", 400)
+    return ok(ai_qa.answer(question.strip()))
 
 
 _MAX_CATEGORY_MONTHS = 24
@@ -509,6 +532,7 @@ def alert_prefs_edit():
         ("billDueLeadDays", "bill_due_lead_days"), ("overBudgetEnabled", "over_budget_enabled"),
         ("overBudgetThresholdPct", "over_budget_threshold_pct"),
         ("lowDailyBudgetThreshold", "low_daily_budget_threshold"),
+        ("anomalyEnabled", "anomaly_enabled"), ("weeklyDigestEnabled", "weekly_digest_enabled"),
     ):
         if camel in body:
             fields[snake] = body[camel]

@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ArrowsLeftRight, Bell, CalendarBlank, Gear, Warning, type Icon } from "phosphor-react-native";
+import { ArrowsLeftRight, Bell, CalendarBlank, Gear, Sparkle, Warning, type Icon } from "phosphor-react-native";
 import { Pressable, ScrollView, Switch } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -75,6 +75,16 @@ export default function BudgetAlertsScreen() {
                     value={data.prefs.overBudgetEnabled}
                     onChange={(v) => handlePrefChange({ overBudgetEnabled: v })}
                   />
+                  <PrefRow
+                    label="Unusual spending alerts"
+                    value={data.prefs.anomalyEnabled}
+                    onChange={(v) => handlePrefChange({ anomalyEnabled: v })}
+                  />
+                  <PrefRow
+                    label="Weekly AI digest"
+                    value={data.prefs.weeklyDigestEnabled}
+                    onChange={(v) => handlePrefChange({ weeklyDigestEnabled: v })}
+                  />
                   <Text variant="caption" tone="faint">
                     Bills alert {data.prefs.billDueLeadDays} day{data.prefs.billDueLeadDays === 1 ? "" : "s"} before due;
                     over-budget triggers at {data.prefs.overBudgetThresholdPct}% of a category&rsquo;s limit.
@@ -117,11 +127,14 @@ function alertIconFor(kind: AlertKind): { IconComponent: Icon; tone: IconBadgeTo
   switch (kind) {
     case "over_budget":
     case "low_daily_budget":
+    case "category_spike":
       return { IconComponent: Warning, tone: "negative" };
     case "bill_due":
       return { IconComponent: CalendarBlank, tone: "tight" };
     case "period_rollover":
       return { IconComponent: ArrowsLeftRight, tone: "accent" };
+    case "weekly_digest":
+      return { IconComponent: Sparkle, tone: "accent" };
     case "daily_checkin":
     default:
       return { IconComponent: Bell, tone: "accent" };

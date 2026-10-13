@@ -13,6 +13,7 @@ import { StatCard } from "@/components/StatCard";
 import { ColumnChart, Dumbbell, DualLine, Heatmap, LineVsBaseline, Meter, Sparkline, StackedBar, clamp01 } from "@/components/charts";
 import { useBudgetRevision } from "@/features/budget/BudgetProvider";
 import { getInsights, getInsightsHistory } from "@/features/budget/api";
+import { AiInsightsCard } from "@/features/budget/components/AiInsightsCard";
 import type { BudgetHistory, BudgetInsights, BudgetVsActual } from "@/features/budget/types";
 import { useResource } from "@/hooks/useResource";
 import { AnimatedListItem } from "@/theme/motion";
@@ -79,6 +80,8 @@ export default function BudgetInsightsScreen() {
                 {data.period.label}
               </Text>
             </Stack>
+
+            <AiInsightsCard revision={revision} />
 
             <StatsRow data={data} />
 

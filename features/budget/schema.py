@@ -362,10 +362,21 @@ def _migration_7():
     return [_reset_record_cursor]
 
 
+def _migration_8():
+    """Opt-outs for the AI-assisted alerts (features/budget/ai/): category
+    spike alerts in the 15-minute alerts job, and the Sunday-evening
+    weekly digest push. Both default on, like every other alert kind."""
+    def _add_ai_alert_prefs(conn):
+        _add_column_if_missing(conn, "budget_alert_prefs", "anomaly_enabled", "INTEGER NOT NULL DEFAULT 1")
+        _add_column_if_missing(conn, "budget_alert_prefs", "weekly_digest_enabled", "INTEGER NOT NULL DEFAULT 1")
+
+    return [_add_ai_alert_prefs]
+
+
 # MIGRATIONS[i] upgrades schema version i -> i+1.
 MIGRATIONS = [
     _migration_0(), _migration_1(), _migration_2(), _migration_3(), _migration_4(), _migration_5(),
-    _migration_6(), _migration_7(),
+    _migration_6(), _migration_7(), _migration_8(),
 ]
 BUDGET_SCHEMA_VERSION = len(MIGRATIONS)
 

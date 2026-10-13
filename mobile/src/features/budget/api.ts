@@ -1,6 +1,8 @@
 import { apiClient, LONG_REQUEST_TIMEOUT_MS } from "@/api/client";
 import type { BudgetSnapshot } from "@/api/types";
 import type {
+  AiAnswer,
+  AiInsights,
   Alert,
   AlertPrefs,
   Bill,
@@ -53,6 +55,14 @@ export function getInsights() {
 
 export function getInsightsHistory(periods = 6, groupBy: "period" | "month" = "period") {
   return apiClient.get<BudgetHistory>(`/api/budget/insights/history?periods=${periods}&groupBy=${groupBy}`);
+}
+
+export function getAiInsights(refresh = false) {
+  return apiClient.get<AiInsights | null>(`/api/budget/insights/ai${refresh ? "?refresh=1" : ""}`);
+}
+
+export function askBudget(question: string) {
+  return apiClient.post<AiAnswer | null>("/api/budget/ask", { question });
 }
 
 export function getCategoryPatterns(months = 12) {
