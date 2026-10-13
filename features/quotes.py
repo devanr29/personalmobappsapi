@@ -87,8 +87,17 @@ def get_quote_of_day() -> dict:
     return {"quote": quote, "author": author}
 
 @trace
-def send_scheduled_quote(label: str):
-    """Send an auto-scheduled quote via Expo push (called by scheduler)."""
+def send_scheduled_quote(label: str | None = None):
+    """Send an auto-scheduled quote via Expo push (called by scheduler).
+    Without a label, the title is chosen from the current WIB hour."""
+    if label is None:
+        hour = now_jkt().hour
+        if hour == 6:
+            label = "Good Morning 🌅"
+        elif hour == 21:
+            label = "Good Night 🌙"
+        else:
+            label = "Quote of the Moment ✨"
     try:
         body = generate_daily_quote()
         from push import send_push_notification

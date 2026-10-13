@@ -26,16 +26,10 @@ def register_jobs():
     # registered cron trigger would go stale the moment someone changed it.
     scheduler.add_job(run_budget_alerts, "interval", minutes=15, id="budget_alerts")
 
-    # Daily quote — morning & night (Asia/Jakarta)
+    # Quote push every 3 hours (Asia/Jakarta): 00, 03, 06, … 21.
+    # The notification title is picked from the hour at fire time.
     scheduler.add_job(
         send_scheduled_quote, "cron",
-        hour=6, minute=0,
-        args=["Good Morning 🌅"],
-        id="morning_quote",
-    )
-    scheduler.add_job(
-        send_scheduled_quote, "cron",
-        hour=23, minute=0,
-        args=["Good Night 🌙"],
-        id="night_quote",
+        hour="*/3", minute=0,
+        id="quote_3h",
     )
