@@ -2,6 +2,14 @@
 // Pairs with the duration/easing/spring/stagger values in tokens.ts so every
 // animation in the app pulls from the same handful of curves instead of each
 // screen inventing its own.
+//
+// Reduce Motion: every Reanimated withTiming/withSpring/layout animation
+// defaults to ReduceMotion.System, i.e. it jumps straight to its end value
+// when the OS setting is on (and a reversing withRepeat loop never starts).
+// That covers translation and scale, but "fewer and gentler" also means
+// keeping the opacity changes that explain what happened — those are opted
+// back in below with ReduceMotion.Never. CSS transitions (caretStyle) don't
+// read the setting at all, so they take it explicitly.
 import * as Haptics from "expo-haptics";
 import type { ReactNode } from "react";
 import { useEffect } from "react";
@@ -13,7 +21,9 @@ import Animated, {
   FadeIn,
   FadeOut,
   LinearTransition,
+  ReduceMotion,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withSpring,
@@ -37,21 +47,24 @@ export const easing = {
 /** Expand/collapse disclosure motion (ExpandableCard, CollapsibleSection).
  *  `layoutTransition` goes on every view whose position or size can change
  *  when a disclosure opens — the growing card itself and everything below
- *  it — so siblings slide instead of jumping. Reduce Motion skips all three
- *  (Reanimated's default ReduceMotion.System for layout animations). */
+ *  it — so siblings slide instead of jumping. Under Reduce Motion the layout
+ *  snaps and the exit is instant, but the detail content still fades in
+ *  (opacity only). Exiting can't keep its fade: the layout has already
+ *  snapped shut, so the fading ghost would sit on top of the next card. */
 export const disclosure = {
   layoutTransition: LinearTransition.duration(motionTokens.duration.base).easing(easing.inOut),
-  entering: FadeIn.duration(motionTokens.duration.base).easing(easing.out),
+  entering: FadeIn.duration(motionTokens.duration.base).easing(easing.out).reduceMotion(ReduceMotion.Never),
   exiting: FadeOut.duration(motionTokens.duration.fast).easing(easing.out),
 };
 
 /** Style for a disclosure caret: rotates 180° on a CSS transition when
- *  `expanded` flips, instead of snapping. */
-export function caretStyle(expanded: boolean) {
+ *  `expanded` flips, instead of snapping — snaps under Reduce Motion (pass
+ *  useReducedMotion()). */
+export function caretStyle(expanded: boolean, reduced: boolean) {
   return {
     transform: [{ rotate: expanded ? "180deg" : "0deg" }],
     transitionProperty: "transform",
-    transitionDuration: motionTokens.duration.base,
+    transitionDuration: reduced ? 0 : motionTokens.duration.base,
     transitionTimingFunction: cubicBezier(...(motionTokens.easing.inOut as [number, number, number, number])),
   } as const;
 }
@@ -59,13 +72,20 @@ export function caretStyle(expanded: boolean) {
 /**
  * Fade + rise entrance for a single item. Pass a list index to stagger it —
  * delay is capped at `motion.staggerCap` items so long lists don't take
- * seconds to finish animating in.
+ * seconds to finish animating in. Reduce Motion: a plain short fade, no
+ * rise and no stagger.
  */
 export function useEntrance(index = 0) {
+  const reduced = useReducedMotion();
   const opacity = useSharedValue(0);
-  const translateY = useSharedValue(8);
+  const translateY = useSharedValue(reduced ? 0 : 8);
 
   useEffect(() => {
+    if (reduced) {
+      opacity.value = withTiming(1, { duration: motionTokens.duration.fast, easing: easing.out, reduceMotion: ReduceMotion.Never });
+      translateY.value = 0;
+      return;
+    }
     const delay = Math.min(index, motionTokens.staggerCap) * motionTokens.staggerStep;
     opacity.value = withDelay(delay, withTiming(1, { duration: motionTokens.duration.base, easing: easing.decelerate }));
     translateY.value = withDelay(delay, withTiming(0, { duration: motionTokens.duration.base, easing: easing.decelerate }));
@@ -80,19 +100,33 @@ export function useEntrance(index = 0) {
   }));
 }
 
+// Reduce Motion press feedback: a dim instead of a scale, so a press still
+// visibly registers without anything changing size.
+const REDUCED_PRESS_OPACITY = 0.7;
+
 /** Raw press-scale shared value + handlers, for components that need the
  *  animated style merged into a larger style array. */
 export function usePressScale(target = 0.97) {
+  const reduced = useReducedMotion();
   const scale = useSharedValue(1);
+  const opacity = useSharedValue(1);
 
   const onPressIn = () => {
+    if (reduced) {
+      opacity.value = withTiming(REDUCED_PRESS_OPACITY, { duration: motionTokens.duration.fast, easing: easing.out, reduceMotion: ReduceMotion.Never });
+      return;
+    }
     scale.value = withTiming(target, { duration: motionTokens.duration.fast, easing: easing.standard });
   };
   const onPressOut = () => {
+    if (reduced) {
+      opacity.value = withTiming(1, { duration: motionTokens.duration.fast, easing: easing.out, reduceMotion: ReduceMotion.Never });
+      return;
+    }
     scale.value = withSpring(1, motionTokens.spring);
   };
 
-  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value, transform: [{ scale: scale.value }] }));
 
   return { style, onPressIn, onPressOut };
 }

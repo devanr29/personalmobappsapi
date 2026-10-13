@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import Animated from "react-native-reanimated";
+import Animated, { useReducedMotion } from "react-native-reanimated";
 import { CaretDown } from "phosphor-react-native";
 
 import { caretStyle, disclosure, PressableScale } from "@/theme/motion";
@@ -59,10 +59,11 @@ export function ExpandableCard({ header, children, defaultExpanded = false, acce
 
 function HeaderRow({ expanded, children }: { expanded: boolean; children: ReactNode }) {
   const theme = useTheme();
+  const reduced = useReducedMotion();
   return (
     <HStack align="center" justify="space-between" gap={3}>
       <Stack flex={1}>{children}</Stack>
-      <Animated.View style={caretStyle(expanded)}>
+      <Animated.View style={caretStyle(expanded, reduced)}>
         <CaretDown size={14} color={theme.colors.neutral[500]} weight="bold" />
       </Animated.View>
     </HStack>

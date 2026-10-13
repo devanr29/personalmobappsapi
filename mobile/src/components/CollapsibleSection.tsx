@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import Animated from "react-native-reanimated";
+import Animated, { useReducedMotion } from "react-native-reanimated";
 import { CaretDown, Plus } from "phosphor-react-native";
 
 import { Card } from "@/components/Card";
@@ -29,6 +29,7 @@ export type CollapsibleSectionProps = {
  * cards, which carry it too) when anything above them opens or closes. */
 export function CollapsibleSection({ title, summary, addLabel, onAdd, children, defaultExpanded = false }: CollapsibleSectionProps) {
   const theme = useTheme();
+  const reduced = useReducedMotion();
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   return (
@@ -47,7 +48,7 @@ export function CollapsibleSection({ title, summary, addLabel, onAdd, children, 
                 {summary}
               </Text>
             </Stack>
-            <Animated.View style={caretStyle(expanded)}>
+            <Animated.View style={caretStyle(expanded, reduced)}>
               <CaretDown size={14} color={theme.colors.neutral[500]} weight="bold" />
             </Animated.View>
           </HStack>

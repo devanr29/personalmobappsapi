@@ -13,6 +13,7 @@ import {
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, {
   cancelAnimation,
+  ReduceMotion,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -67,7 +68,8 @@ const CANCEL_VELOCITY = -300;
  *    (rubber-banded) never shows a gap under it.
  *
  * Reduce Motion: the sheet appears and disappears in place and only the
- * backdrop fades; dragging still tracks the finger. */
+ * backdrop fades in (opted out of Reanimated's default jump-to-end with
+ * ReduceMotion.Never); dragging still tracks the finger. */
 export function BottomSheet({ visible, onClose, dismissDisabled = false, onDismiss, maxHeight = "90%", children }: BottomSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -91,7 +93,7 @@ export function BottomSheet({ visible, onClose, dismissDisabled = false, onDismi
     if (visible) {
       if (!mounted) return;
       drag.set(0);
-      progress.set(reduced ? withTiming(1, { duration: motion.duration.fast, easing: easing.out }) : withSpring(1, OPEN_SPRING));
+      progress.set(reduced ? withTiming(1, { duration: motion.duration.fast, easing: easing.out, reduceMotion: ReduceMotion.Never }) : withSpring(1, OPEN_SPRING));
     } else if (reduced) {
       progress.set(0);
     } else {
