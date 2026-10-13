@@ -101,7 +101,9 @@ def send_scheduled_quote(label: str | None = None):
     try:
         body = generate_daily_quote()
         from push import send_push_notification
-        send_push_notification(label, body)
-        print(f"[Quote scheduler] {label} quote sent successfully.")
+        if send_push_notification(label, body):
+            print(f"[Quote scheduler] {label} quote sent successfully.")
+        else:
+            print(f"[Quote scheduler] {label} quote not delivered.")
     except Exception as e:
         print(f"[Quote scheduler] Failed to send {label} quote: {e}")
