@@ -4,6 +4,21 @@ export function formatRupiah(amount: number): string {
   return `${rounded < 0 ? "-" : ""}Rp ${withDots}`;
 }
 
+/** formatRupiah as a worklet, for text driven on the UI thread
+ * (AnimatedCurrency). Same output; digit loop instead of a regex so it
+ * doesn't depend on RegExp support in the worklet runtime. */
+export function formatRupiahWorklet(amount: number): string {
+  "worklet";
+  const rounded = Math.round(amount);
+  const digits = Math.abs(rounded).toString();
+  let withDots = "";
+  for (let i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 === 0) withDots += ".";
+    withDots += digits[i];
+  }
+  return `${rounded < 0 ? "-" : ""}Rp ${withDots}`;
+}
+
 /** Axis-tick form: "Rp 3,9jt". formatRupiah is ~12 characters wide
  * ("Rp 3.850.000") and does not fit a chart's value-axis gutter.
  * rb/jt/m = ribu/juta/miliar, matching the existing "Rp" + dot-thousands

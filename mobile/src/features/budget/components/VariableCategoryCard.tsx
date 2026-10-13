@@ -1,5 +1,4 @@
-import { CheckCircle, CircleIcon, Paperclip, PencilSimple } from "phosphor-react-native";
-import { ActivityIndicator } from "react-native";
+import { Paperclip, PencilSimple } from "phosphor-react-native";
 
 import { ExpandableCard } from "@/components/ExpandableCard";
 import { Meter, clamp01 } from "@/components/charts";
@@ -8,6 +7,7 @@ import { HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { formatRupiah } from "@/utils/currency";
 import type { BudgetVariableItem, Category, Wallet } from "../types";
+import { PaidCheck } from "./PaidCheck";
 import { SpendInputRow } from "./SpendInputRow";
 
 // The action rows are caption-sized (~16pt tall); extend the touch area
@@ -87,13 +87,7 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
           <>
             <PressableScale hitSlop={ACTION_HIT_SLOP} onPress={onTogglePaid} disabled={payPending} accessibilityRole="button" accessibilityLabel={item.paid ? "Mark unpaid" : "Mark paid"}>
               <HStack align="center" gap={1.5}>
-                {payPending ? (
-                  <ActivityIndicator size="small" color={theme.colors.accent} />
-                ) : item.paid ? (
-                  <CheckCircle size={16} color={theme.status.comfortable} weight="fill" />
-                ) : (
-                  <CircleIcon size={16} color={theme.colors.neutral[500]} />
-                )}
+                <PaidCheck paid={item.paid} pending={payPending} />
                 <Text variant="caption" tone={item.paid ? "positive" : "muted"}>
                   {item.paid ? "Paid this period" : "Mark as paid"}
                 </Text>

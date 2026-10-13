@@ -1,7 +1,6 @@
 import { CheckCircle, Quotes } from "phosphor-react-native";
 import { View } from "react-native";
 
-import { AnimatedCurrency } from "@/components/AnimatedCurrency";
 import { StackedBar } from "@/components/charts";
 import type { ChatBudgetData, ChatMessage, ChatTaskData } from "@/api/types";
 import { HStack, Stack, Text } from "@/theme/primitives";
@@ -123,7 +122,7 @@ function BudgetBubble({ data }: { data: ChatBudgetData }) {
       <HStack align="center" gap={2} py={2} px={3} radius="md" bg={theme.colors.accentRamp[900]}>
         <CheckCircle size={16} weight="fill" color={theme.colors.accentRamp[300]} />
         <Text variant="meta" style={{ flex: 1, color: theme.colors.accentRamp[200] }}>
-          Daily budget <AnimatedCurrency value={data.dailyBudget} variant="meta" style={{ color: theme.colors.accentRamp[100] }} />
+          Daily budget <Text variant="meta" numeric style={{ color: theme.colors.accentRamp[100] }}>{formatRupiah(data.dailyBudget)}</Text>
           /day
         </Text>
       </HStack>

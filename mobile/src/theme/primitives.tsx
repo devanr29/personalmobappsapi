@@ -19,7 +19,7 @@ import { useTheme, type Theme } from "./ThemeProvider";
 import type { SpacingKey } from "./tokens";
 
 type RadiusKey = keyof Theme["radius"];
-type TypeVariant = keyof Theme["type"];
+export type TypeVariant = keyof Theme["type"];
 type NumericVariant = keyof Theme["numericType"];
 export type Tone = "primary" | "secondary" | "muted" | "faint" | "accent" | "positive" | "negative" | "tight" | "inverse";
 
@@ -174,12 +174,19 @@ export interface TextProps extends Omit<RNTextProps, "style"> {
   style?: StyleProp<TextStyle>;
 }
 
+/** The type + color style <Text> resolves for a variant/tone — for text
+ *  rendered by something other than <Text> (e.g. AnimatedCurrency's
+ *  UI-thread-driven TextInput) that must still match it exactly. */
+export function textStyle(theme: Theme, variant: TypeVariant = "body", tone: Tone = "primary", numeric = false): TextStyle {
+  const base: TextStyle = numeric && isNumericVariant(theme, variant) ? theme.numericType[variant] : theme.type[variant];
+  return { ...base, color: toneColor(theme, tone) };
+}
+
 export function Text({ children, variant = "body", tone = "primary", numeric, align, style, ...rest }: TextProps) {
   const theme = useTheme();
-  const base: TextStyle = numeric && isNumericVariant(theme, variant) ? theme.numericType[variant] : theme.type[variant];
 
   return (
-    <RNText style={[base, { color: toneColor(theme, tone) }, align !== undefined && { textAlign: align }, style]} {...rest}>
+    <RNText style={[textStyle(theme, variant, tone, numeric), align !== undefined && { textAlign: align }, style]} {...rest}>
       {children}
     </RNText>
   );

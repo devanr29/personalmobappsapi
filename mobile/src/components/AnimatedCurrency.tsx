@@ -1,45 +1,63 @@
-// RN Text can't have its children driven by useAnimatedStyle (that only
-// patches style props, not children) — so the count-up runs as a Reanimated
-// timing on a shared value, mirrored into React state via useAnimatedReaction
-// only when the rounded Rupiah amount actually changes.
-import { useEffect, useState } from "react";
-import { runOnJS, useAnimatedReaction, useSharedValue, withTiming } from "react-native-reanimated";
+// Count-up for live IDR figures, run entirely on the UI thread. RN Text
+// can't have its content driven by a shared value, so this renders a
+// non-editable TextInput styled exactly like <Text> and patches its `text`
+// prop from useAnimatedProps every frame — React never re-renders while the
+// number ticks (the old version mirrored every rounded value into React
+// state via runOnJS, one render per frame).
+//
+// Can't be nested inside a <Text> (it's a TextInput); inline amounts in a
+// sentence use formatRupiah directly.
+import { useEffect } from "react";
+import { TextInput, type StyleProp, type TextStyle } from "react-native";
+import Animated, { useAnimatedProps, useReducedMotion, useSharedValue, withTiming } from "react-native-reanimated";
 
-import { Text, type TextProps } from "@/theme/primitives";
 import { easing } from "@/theme/motion";
+import { textStyle, type Tone, type TypeVariant } from "@/theme/primitives";
+import { useTheme } from "@/theme/ThemeProvider";
 import { motion } from "@/theme/tokens";
-import { formatRupiah } from "@/utils/currency";
+import { formatRupiah, formatRupiahWorklet } from "@/utils/currency";
 
-export interface AnimatedCurrencyProps extends Omit<TextProps, "children" | "numeric"> {
+const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
+
+export interface AnimatedCurrencyProps {
   value: number;
+  variant?: TypeVariant;
+  tone?: Tone;
+  style?: StyleProp<TextStyle>;
   durationMs?: number;
 }
 
-export function AnimatedCurrency({ value, durationMs = motion.duration.slow, ...textProps }: AnimatedCurrencyProps) {
-  const progress = useSharedValue(0);
-  const [display, setDisplay] = useState(() => formatRupiah(value));
-  const setDisplayFromValue = (n: number) => setDisplay(formatRupiah(n));
+export function AnimatedCurrency({ value, variant, tone, style, durationMs = motion.duration.slow }: AnimatedCurrencyProps) {
+  const theme = useTheme();
+  const reduced = useReducedMotion();
+  // Counts up from 0 on first mount, then from the previous value on change.
+  const shown = useSharedValue(reduced ? value : 0);
 
   useEffect(() => {
-    progress.value = withTiming(value, { duration: durationMs, easing: easing.decelerate });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+    shown.set(reduced ? value : withTiming(value, { duration: durationMs, easing: easing.decelerate }));
+  }, [value, durationMs, reduced, shown]);
 
-  useAnimatedReaction(
-    () => Math.round(progress.value),
-    (current, previous) => {
-      if (current !== previous) {
-        // formatRupiah is a plain JS function, not a worklet — it must run
-        // inside the runOnJS callback (JS thread), not be called on the UI
-        // thread and have only its result handed across the bridge.
-        runOnJS(setDisplayFromValue)(current);
-      }
-    },
-  );
+  const animatedProps = useAnimatedProps(() => {
+    const text = formatRupiahWorklet(shown.get());
+    // `text` isn't in TextInput's public props but is what the native view
+    // reads; defaultValue keeps it in sync if the view re-mounts.
+    return { text, defaultValue: text } as object;
+  });
 
   return (
-    <Text numeric {...textProps}>
-      {display}
-    </Text>
+    <AnimatedTextInput
+      editable={false}
+      scrollEnabled={false}
+      underlineColorAndroid="transparent"
+      defaultValue={formatRupiah(reduced ? value : 0)}
+      animatedProps={animatedProps}
+      accessibilityRole="text"
+      accessibilityLabel={formatRupiah(value)}
+      style={[
+        textStyle(theme, variant, tone, true),
+        { padding: theme.spacing[0], margin: theme.spacing[0], includeFontPadding: false, pointerEvents: "none" },
+        style,
+      ]}
+    />
   );
 }
