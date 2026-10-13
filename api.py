@@ -1,4 +1,5 @@
 import contextvars
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, request
@@ -9,6 +10,7 @@ from intents import route_intent
 from features.tasks import get_tasks_structured, complete_task_by_id, delete_task_by_id
 from features.calendar import (
     get_events_structured,
+    get_events_range,
     save_event,
     parse_event_with_ai,
     edit_event_by_id,
@@ -161,6 +163,20 @@ def tasks_delete(task_id):
 # ================================================================
 @api_bp.route("/events", methods=["GET"])
 def events_list():
+    start_raw = request.args.get("start")
+    end_raw = request.args.get("end")
+    if start_raw is not None or end_raw is not None:
+        try:
+            start = datetime.date.fromisoformat(start_raw or "")
+            end = datetime.date.fromisoformat(end_raw or "")
+        except ValueError:
+            return _err("VALIDATION_ERROR", "start and end must both be YYYY-MM-DD.", 400)
+        if end < start:
+            return _err("VALIDATION_ERROR", "end must not be before start.", 400)
+        if (end - start).days > 62:
+            return _err("VALIDATION_ERROR", "Range must be 62 days or less.", 400)
+        return _ok(get_events_range(start, end))
+
     days_raw = request.args.get("days")
     if days_raw is None:
         return _ok(get_events_structured())

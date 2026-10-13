@@ -54,7 +54,7 @@ export function wibDayKey(date: Date): string {
   return `${year}-${pad(month + 1)}-${pad(day)}`;
 }
 
-function formatClock(date: Date): string {
+export function formatClock(date: Date): string {
   const { hours, minutes } = wibParts(date);
   return `${pad(hours)}:${pad(minutes)}`;
 }
@@ -119,4 +119,45 @@ export function formatReminderTime(iso: string): string {
   const target = parseNaiveDateTime(iso) ?? new Date(iso);
   const isToday = wibDayKey(target) === wibDayKey(new Date());
   return `${isToday ? "Today" : "Later"} · ${formatClock(target)}`;
+}
+
+/** e.g. "October 2026". */
+export function formatMonthTitle(year: number, month: number): string {
+  const parts = wibParts(wibDate(year, month, 1));
+  return `${MONTHS[parts.month]} ${parts.year}`;
+}
+
+/** The 6×7 grid of WIB days (Monday-first) covering the given month,
+ * padded with trailing/leading days from the neighbouring months. */
+export function monthMatrix(year: number, month: number): Date[][] {
+  const first = wibParts(wibDate(year, month, 1));
+  const lead = (first.weekday + 6) % 7; // Monday=0
+  const weeks: Date[][] = [];
+  for (let w = 0; w < 6; w += 1) {
+    const week: Date[] = [];
+    for (let d = 0; d < 7; d += 1) {
+      week.push(wibDate(first.year, first.month, 1 - lead + w * 7 + d));
+    }
+    weeks.push(week);
+  }
+  return weeks;
+}
+
+/** { year, month } shifted by `delta` months, normalised. */
+export function addMonths(year: number, month: number, delta: number): { year: number; month: number } {
+  const total = year * 12 + month + delta;
+  return { year: Math.floor(total / 12), month: ((total % 12) + 12) % 12 };
+}
+
+export function isSameWibDay(a: Date, b: Date): boolean {
+  return wibDayKey(a) === wibDayKey(b);
+}
+
+/** e.g. "1h 30m", "45m". */
+export function formatDuration(ms: number): string {
+  const totalMinutes = Math.round(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }

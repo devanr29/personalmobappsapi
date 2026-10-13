@@ -174,42 +174,52 @@ def get_events(date_hint: str = None, query: str = "") -> str:
 # STRUCTURED — list[dict] shape for the mobile REST API
 # ================================================================
 @trace
+def _structure_event(ev: dict) -> dict:
+    start = ev.get("start", {})
+    end = ev.get("end", {})
+    all_day = "dateTime" not in start
+    return {
+        "id": ev["id"],
+        "title": ev.get("summary", "(No title)"),
+        "start": start.get("date") if all_day else start["dateTime"],
+        # All-day "end" is exclusive (the day after the last day), per the Google API.
+        "end": end.get("date") if all_day else end.get("dateTime"),
+        "allDay": all_day,
+    }
+
+
+def _list_events(time_min: datetime.datetime, time_max: datetime.datetime, max_results: int) -> list[dict]:
+    calendar_svc, _, _ = get_google_services()
+    result = calendar_svc.events().list(
+        calendarId="primary",
+        timeMin=time_min.isoformat(),
+        timeMax=time_max.isoformat(),
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+    return [_structure_event(ev) for ev in result.get("items", [])]
+
+
 def get_events_structured(days_ahead: int = 7) -> list[dict]:
     try:
         now       = now_jkt()
         day_start = localize_jkt(now.replace(second=0, microsecond=0))
         day_end   = localize_jkt((now + datetime.timedelta(days=days_ahead)).replace(hour=23, minute=59, second=59))
-
-        calendar_svc, _, _ = get_google_services()
-        result = calendar_svc.events().list(
-            calendarId="primary",
-            timeMin=day_start.isoformat(),
-            timeMax=day_end.isoformat(),
-            maxResults=20,
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
-
-        structured = []
-        for ev in result.get("items", []):
-            start = ev.get("start", {})
-            if "dateTime" in start:
-                structured.append({
-                    "id": ev["id"],
-                    "title": ev.get("summary", "(No title)"),
-                    "start": start["dateTime"],
-                    "allDay": False,
-                })
-            else:
-                structured.append({
-                    "id": ev["id"],
-                    "title": ev.get("summary", "(No title)"),
-                    "start": start.get("date"),
-                    "allDay": True,
-                })
-        return structured
+        return _list_events(day_start, day_end, 20)
     except Exception as e:
         print(f"[get_events_structured error] {e}")
+        return []
+
+
+def get_events_range(start_date: datetime.date, end_date: datetime.date) -> list[dict]:
+    """Events overlapping the WIB days start_date..end_date (inclusive)."""
+    try:
+        time_min = localize_jkt(datetime.datetime.combine(start_date, datetime.time.min))
+        time_max = localize_jkt(datetime.datetime.combine(end_date + datetime.timedelta(days=1), datetime.time.min))
+        return _list_events(time_min, time_max, 250)
+    except Exception as e:
+        print(f"[get_events_range error] {e}")
         return []
 
 # ================================================================

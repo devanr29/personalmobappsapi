@@ -34,6 +34,8 @@ export interface CalendarEvent {
   id: string;
   title: string;
   start: string | null;
+  /** Timed: ISO instant. All-day: "YYYY-MM-DD", exclusive (day after the last day). */
+  end: string | null;
   allDay: boolean;
 }
 

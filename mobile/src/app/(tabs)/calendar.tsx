@@ -1,80 +1,78 @@
-import { CalendarBlank, Plus } from "phosphor-react-native";
+import { Plus } from "phosphor-react-native";
 import { useCallback, useMemo, useState } from "react";
 import { ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { createEvent, deleteEvent, listEvents } from "@/api/events";
+import { createEvent, deleteEvent, listEventsRange } from "@/api/events";
 import type { CalendarEvent } from "@/api/types";
+import { DayAgenda, indexEventsByDay, MonthGrid } from "@/components/calendar";
 import { Card } from "@/components/Card";
 import { ComposeSheet } from "@/components/ComposeSheet";
+import { ErrorState } from "@/components/ErrorState";
 import { FAB } from "@/components/FAB";
-import { Heatmap, type HeatmapCell } from "@/components/charts";
-import { ListScreen } from "@/components/ListScreen";
 import { Skeleton } from "@/components/Skeleton";
-import { SwipeableRow } from "@/components/SwipeableRow";
-import { Tag } from "@/components/Tag";
 import { useResource } from "@/hooks/useResource";
-import { AnimatedListItem, PressableScale } from "@/theme/motion";
-import { HStack, Stack, Text } from "@/theme/primitives";
+import { HStack, Stack } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
-import { formatDayHeader, formatEventTime, wibDate, wibDayKey, wibParts } from "@/utils/date";
+import { addMonths, monthMatrix, wibDate, wibDayKey, wibParts } from "@/utils/date";
 
-const DAY_RANGES = [7, 14, 30];
+type MonthEvents = { key: string; events: CalendarEvent[] };
 
-function eventDate(event: CalendarEvent): Date {
-  if (!event.start) return new Date();
-  if (event.allDay) {
-    const [y, m, d] = event.start.split("-").map(Number);
-    return wibDate(y, m - 1, d);
-  }
-  return new Date(event.start);
-}
-
-function groupByDay(events: CalendarEvent[]): { key: string; date: Date; events: CalendarEvent[] }[] {
-  const groups: { key: string; date: Date; events: CalendarEvent[] }[] = [];
-  for (const event of events) {
-    const date = eventDate(event);
-    const key = wibDayKey(date);
-    const last = groups[groups.length - 1];
-    if (last && last.key === key) {
-      last.events.push(event);
-    } else {
-      groups.push({ key, date, events: [event] });
-    }
-  }
-  return groups;
-}
-
-function densityStrip(events: CalendarEvent[], days: number): HeatmapCell[] {
-  const counts = new Map<string, number>();
-  for (const event of events) {
-    const key = wibDayKey(eventDate(event));
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  const today = wibParts(new Date());
-  const cells: HeatmapCell[] = [];
-  for (let i = 0; i < days; i += 1) {
-    const date = wibDate(today.year, today.month, today.day + i);
-    const key = wibDayKey(date);
-    const { day, weekday: sundayFirst } = wibParts(date);
-    const count = counts.get(key) ?? 0;
-    // weekday: Monday=0..Sunday=6 (JS getDay() is Sunday=0..Saturday=6)
-    const weekday = (sundayFirst + 6) % 7;
-    cells.push({ date: key, label: String(day), weekday, value: count, count });
-  }
-  return cells;
+function currentMonth() {
+  const { year, month } = wibParts(new Date());
+  return { year, month };
 }
 
 export default function CalendarScreen() {
   const theme = useTheme();
-  const [days, setDays] = useState(7);
+  const [visible, setVisible] = useState(currentMonth);
+  const [selected, setSelected] = useState(() => new Date());
   const [composeVisible, setComposeVisible] = useState(false);
 
-  const fetcher = useCallback(() => listEvents(days), [days]);
-  const { data, loading, error, refetch } = useResource<CalendarEvent[]>(fetcher, "Couldn't load your calendar.");
+  // Fetch the whole 6-week grid, so leading/trailing days get their dots too.
+  const weeks = useMemo(() => monthMatrix(visible.year, visible.month), [visible]);
+  const rangeStart = wibDayKey(weeks[0][0]);
+  const rangeEnd = wibDayKey(weeks[5][6]);
+  const monthKey = `${rangeStart}_${rangeEnd}`;
+
+  const fetcher = useCallback(
+    () => listEventsRange(rangeStart, rangeEnd).then((events): MonthEvents => ({ key: `${rangeStart}_${rangeEnd}`, events })),
+    [rangeStart, rangeEnd],
+  );
+  const { data, loading, error, refetch, mutate } = useResource<MonthEvents>(fetcher, "Couldn't load your calendar.");
+
+  // The previous month's data stays on screen (dimmed) until the new month arrives.
+  const stale = data !== null && data.key !== monthKey;
+  const eventsByDay = useMemo(() => (stale || !data ? new Map<string, CalendarEvent[]>() : indexEventsByDay(data.events)), [data, stale]);
+  const dayEvents = eventsByDay.get(wibDayKey(selected)) ?? [];
+
+  const changeMonth = (delta: number) => {
+    const next = addMonths(visible.year, visible.month, delta);
+    setVisible(next);
+    const today = wibParts(new Date());
+    setSelected(today.year === next.year && today.month === next.month ? new Date() : wibDate(next.year, next.month, 1));
+  };
+
+  const selectDay = (date: Date) => {
+    const { year, month } = wibParts(date);
+    // Tapping a leading/trailing day from a neighbouring month moves to that month.
+    if (year !== visible.year || month !== visible.month) setVisible({ year, month });
+    setSelected(date);
+  };
+
+  const goToday = () => {
+    setVisible(currentMonth());
+    setSelected(new Date());
+  };
 
   const handleDelete = (id: string) => {
-    deleteEvent(id).finally(refetch);
+    const removed = data?.events.find((event) => event.id === id);
+    if (!removed) return;
+    mutate(
+      (prev) => ({ ...prev, events: prev.events.filter((event) => event.id !== id) }),
+      (prev) => ({ ...prev, events: [...prev.events, removed] }),
+      () => deleteEvent(id),
+    );
   };
 
   const handleCreate = async (message: string) => {
@@ -82,40 +80,39 @@ export default function CalendarScreen() {
     refetch();
   };
 
+  if (error && data === null) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={["top"]}>
+        <ErrorState message={error} onRetry={refetch} />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={["top"]}>
-      <HStack gap={2} p={4} pb={2}>
-        {DAY_RANGES.map((range) => (
-          <PressableScale key={range} onPress={() => setDays(range)} accessibilityRole="button" accessibilityLabel={`Show ${range} days`}>
-            <Stack py={1.5} px={4} radius="pill" bg={days === range ? theme.colors.accent : theme.colors.surface}>
-              <Text variant="meta" style={{ color: days === range ? theme.colors.bg : theme.colors.neutral[400], fontFamily: theme.fontFamily.medium }}>
-                {range} days
-              </Text>
-            </Stack>
-          </PressableScale>
-        ))}
-      </HStack>
-
-      <ListScreen
-        data={data}
-        loading={loading}
-        error={error}
-        refetch={refetch}
-        skeleton={
-          <Stack p={4} gap={3}>
-            <Skeleton height={80} radius={theme.radius.md} />
-            <Skeleton height={80} radius={theme.radius.md} />
-            <Skeleton height={80} radius={theme.radius.md} />
-          </Stack>
-        }
-        isEmpty={(events) => events.length === 0}
-        emptyMessage="No events in this range."
-        emptyIcon={CalendarBlank}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: theme.spacing[4], paddingBottom: theme.spacing[12] * 2, gap: theme.spacing[5] }}
       >
-        {(events) => (
-          <CalendarBody events={events} days={days} onDelete={handleDelete} />
-        )}
-      </ListScreen>
+        <Card>
+          {loading && data === null ? (
+            <CalendarSkeleton />
+          ) : (
+            <MonthGrid
+              year={visible.year}
+              month={visible.month}
+              selected={selected}
+              eventsByDay={eventsByDay}
+              stale={stale}
+              onSelect={selectDay}
+              onChangeMonth={changeMonth}
+              onToday={goToday}
+            />
+          )}
+        </Card>
+
+        {data !== null && !stale ? <DayAgenda date={selected} events={dayEvents} onDelete={handleDelete} /> : null}
+      </ScrollView>
 
       <FAB IconComponent={Plus} accessibilityLabel="Add event" onPress={() => setComposeVisible(true)} />
       <ComposeSheet
@@ -129,57 +126,21 @@ export default function CalendarScreen() {
   );
 }
 
-function CalendarBody({ events, days, onDelete }: { events: CalendarEvent[]; days: number; onDelete: (id: string) => void }) {
+function CalendarSkeleton() {
   const theme = useTheme();
-  const groups = useMemo(() => groupByDay(events), [events]);
-  const density = useMemo(() => densityStrip(events, days), [events, days]);
-
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: theme.spacing[4], paddingTop: theme.spacing[1], paddingBottom: theme.spacing[10], gap: theme.spacing[4] }}>
-      <Card>
-        <Stack gap={3}>
-          <Text variant="label" tone="secondary">
-            Density
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <Heatmap cells={density} />
-          </ScrollView>
-        </Stack>
-      </Card>
-
-      {groups.map((group, groupIndex) => (
-        <AnimatedListItem key={group.key} index={groupIndex}>
-          <Stack gap={2}>
-            <Text variant="label" tone="secondary">
-              {formatDayHeader(group.date)}
-            </Text>
-            <Card padding={0}>
-              {group.events.map((event, index) => (
-                <SwipeableRow key={event.id} onDelete={() => onDelete(event.id)}>
-                  <HStack
-                    align="center"
-                    gap={3}
-                    py={3}
-                    px={4}
-                    style={{ borderTopWidth: index === 0 ? 0 : 1, borderTopColor: theme.colors.divider }}
-                  >
-                    {event.allDay ? (
-                      <Tag label="All day" variant="accent" />
-                    ) : (
-                      <Text variant="label" tone="secondary" numeric style={{ width: 52, fontFamily: theme.fontFamily.medium }}>
-                        {formatEventTime(event.start, false)}
-                      </Text>
-                    )}
-                    <Text variant="body" style={{ flex: 1 }}>
-                      {event.title}
-                    </Text>
-                  </HStack>
-                </SwipeableRow>
-              ))}
-            </Card>
-          </Stack>
-        </AnimatedListItem>
+    <Stack gap={3}>
+      <HStack justify="space-between" align="center">
+        <Skeleton height={26} width={160} radius={theme.radius.sm} />
+        <Skeleton height={26} width={64} radius={theme.radius.sm} />
+      </HStack>
+      {Array.from({ length: 6 }, (_, row) => (
+        <HStack key={row} justify="space-around">
+          {Array.from({ length: 7 }, (_, col) => (
+            <Skeleton key={col} height={34} width={34} radius={17} />
+          ))}
+        </HStack>
       ))}
-    </ScrollView>
+    </Stack>
   );
 }

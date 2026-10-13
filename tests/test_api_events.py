@@ -75,3 +75,54 @@ def test_delete_event_success(client, auth_headers):
         resp = client.delete("/api/events/evt123", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.get_json()["data"] == {"id": "evt123", "deleted": True}
+
+
+def test_get_events_with_range_params(client, auth_headers):
+    import datetime
+    with patch("api.get_events_range", return_value=[]) as mock_range, \
+         patch("api.get_events_structured") as mock_structured:
+        resp = client.get("/api/events?start=2026-09-28&end=2026-11-08", headers=auth_headers)
+    assert resp.status_code == 200
+    mock_range.assert_called_once_with(datetime.date(2026, 9, 28), datetime.date(2026, 11, 8))
+    mock_structured.assert_not_called()
+
+
+def test_get_events_range_returns_end_field(client, auth_headers):
+    events = [{"id": "e1", "title": "Standup", "start": "2026-10-13T09:00:00+07:00",
+               "end": "2026-10-13T09:30:00+07:00", "allDay": False}]
+    with patch("api.get_events_range", return_value=events):
+        resp = client.get("/api/events?start=2026-10-01&end=2026-10-31", headers=auth_headers)
+    assert resp.get_json()["data"] == events
+
+
+def test_get_events_range_requires_both_params(client, auth_headers):
+    resp = client.get("/api/events?start=2026-10-01", headers=auth_headers)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_get_events_range_bad_format(client, auth_headers):
+    resp = client.get("/api/events?start=10/01/2026&end=2026-10-31", headers=auth_headers)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_get_events_range_end_before_start(client, auth_headers):
+    resp = client.get("/api/events?start=2026-10-31&end=2026-10-01", headers=auth_headers)
+    assert resp.status_code == 400
+
+
+def test_get_events_range_too_long(client, auth_headers):
+    resp = client.get("/api/events?start=2026-01-01&end=2026-06-01", headers=auth_headers)
+    assert resp.status_code == 400
+
+
+def test_structure_event_includes_end():
+    from features.calendar import _structure_event
+    timed = _structure_event({"id": "a", "summary": "Gym",
+                              "start": {"dateTime": "2026-10-13T16:30:00+07:00"},
+                              "end": {"dateTime": "2026-10-13T17:30:00+07:00"}})
+    assert timed == {"id": "a", "title": "Gym", "start": "2026-10-13T16:30:00+07:00",
+                     "end": "2026-10-13T17:30:00+07:00", "allDay": False}
+    all_day = _structure_event({"id": "b", "start": {"date": "2026-10-13"}, "end": {"date": "2026-10-15"}})
+    assert all_day == {"id": "b", "title": "(No title)", "start": "2026-10-13", "end": "2026-10-15", "allDay": True}
