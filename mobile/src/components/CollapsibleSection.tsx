@@ -3,7 +3,7 @@ import Animated from "react-native-reanimated";
 import { CaretDown, Plus } from "phosphor-react-native";
 
 import { Card } from "@/components/Card";
-import { useEntrance, PressableScale } from "@/theme/motion";
+import { caretStyle, disclosure, PressableScale } from "@/theme/motion";
 import { HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 
@@ -22,14 +22,17 @@ export type CollapsibleSectionProps = {
  * own Cards too, so unlike ExpandableCard this doesn't nest a Card inside a
  * Card (surface-on-surface reads as one undifferentiated block). The header
  * card is tappable everywhere; the add action lives in the expanded body
- * instead of the header so it isn't a press target nested inside one. */
+ * instead of the header so it isn't a press target nested inside one.
+ *
+ * The body fades in/out on mount/unmount; the section root and the add row
+ * carry the shared layout transition so they slide (along with the item
+ * cards, which carry it too) when anything above them opens or closes. */
 export function CollapsibleSection({ title, summary, addLabel, onAdd, children, defaultExpanded = false }: CollapsibleSectionProps) {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const entranceStyle = useEntrance(0);
 
   return (
-    <Stack gap={3}>
+    <Animated.View layout={disclosure.layoutTransition} style={{ gap: theme.spacing[3] }}>
       <PressableScale
         onPress={() => setExpanded((e) => !e)}
         accessibilityRole="button"
@@ -44,27 +47,29 @@ export function CollapsibleSection({ title, summary, addLabel, onAdd, children, 
                 {summary}
               </Text>
             </Stack>
-            <Animated.View style={{ transform: [{ rotate: expanded ? "180deg" : "0deg" }] }}>
+            <Animated.View style={caretStyle(expanded)}>
               <CaretDown size={14} color={theme.colors.neutral[500]} weight="bold" />
             </Animated.View>
           </HStack>
         </Card>
       </PressableScale>
       {expanded ? (
-        <Animated.View style={entranceStyle}>
+        <Animated.View entering={disclosure.entering} exiting={disclosure.exiting} layout={disclosure.layoutTransition}>
           <Stack gap={3}>
             {children}
-            <PressableScale onPress={onAdd} accessibilityRole="button" accessibilityLabel={addLabel}>
-              <HStack align="center" justify="center" gap={1.5} p={3} radius="md" bg={theme.colors.neutral[800]}>
-                <Plus size={16} color={theme.colors.accent} weight="bold" />
-                <Text variant="label" tone="accent">
-                  {addLabel}
-                </Text>
-              </HStack>
-            </PressableScale>
+            <Animated.View layout={disclosure.layoutTransition}>
+              <PressableScale onPress={onAdd} accessibilityRole="button" accessibilityLabel={addLabel}>
+                <HStack align="center" justify="center" gap={1.5} p={3} radius="md" bg={theme.colors.neutral[800]}>
+                  <Plus size={16} color={theme.colors.accent} weight="bold" />
+                  <Text variant="label" tone="accent">
+                    {addLabel}
+                  </Text>
+                </HStack>
+              </PressableScale>
+            </Animated.View>
           </Stack>
         </Animated.View>
       ) : null}
-    </Stack>
+    </Animated.View>
   );
 }

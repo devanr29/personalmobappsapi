@@ -8,7 +8,11 @@ import { useEffect } from "react";
 import type { PressableProps, StyleProp, ViewStyle } from "react-native";
 import { Pressable } from "react-native";
 import Animated, {
+  cubicBezier,
   Easing,
+  FadeIn,
+  FadeOut,
+  LinearTransition,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
@@ -25,7 +29,32 @@ export const easing = {
   standard: bezier(motionTokens.easing.standard as [number, number, number, number]),
   decelerate: bezier(motionTokens.easing.decelerate as [number, number, number, number]),
   accelerate: bezier(motionTokens.easing.accelerate as [number, number, number, number]),
+  out: bezier(motionTokens.easing.out as [number, number, number, number]),
+  inOut: bezier(motionTokens.easing.inOut as [number, number, number, number]),
+  sheet: bezier(motionTokens.easing.sheet as [number, number, number, number]),
 };
+
+/** Expand/collapse disclosure motion (ExpandableCard, CollapsibleSection).
+ *  `layoutTransition` goes on every view whose position or size can change
+ *  when a disclosure opens — the growing card itself and everything below
+ *  it — so siblings slide instead of jumping. Reduce Motion skips all three
+ *  (Reanimated's default ReduceMotion.System for layout animations). */
+export const disclosure = {
+  layoutTransition: LinearTransition.duration(motionTokens.duration.base).easing(easing.inOut),
+  entering: FadeIn.duration(motionTokens.duration.base).easing(easing.out),
+  exiting: FadeOut.duration(motionTokens.duration.fast).easing(easing.out),
+};
+
+/** Style for a disclosure caret: rotates 180° on a CSS transition when
+ *  `expanded` flips, instead of snapping. */
+export function caretStyle(expanded: boolean) {
+  return {
+    transform: [{ rotate: expanded ? "180deg" : "0deg" }],
+    transitionProperty: "transform",
+    transitionDuration: motionTokens.duration.base,
+    transitionTimingFunction: cubicBezier(...(motionTokens.easing.inOut as [number, number, number, number])),
+  } as const;
+}
 
 /**
  * Fade + rise entrance for a single item. Pass a list index to stagger it —

@@ -216,6 +216,11 @@ export const motion = {
     standard: [0.4, 0, 0.2, 1],
     decelerate: [0, 0, 0.2, 1],
     accelerate: [0.4, 0, 1, 1],
+    // Stronger curves for UI motion: entering/exiting, on-screen movement,
+    // and the iOS sheet curve.
+    out: [0.23, 1, 0.32, 1],
+    inOut: [0.77, 0, 0.175, 1],
+    sheet: [0.32, 0.72, 0, 1],
   },
   spring: { damping: 18, stiffness: 220, mass: 0.9 },
   // ms delay per item for staggered list entrance; caps around 8 items.
