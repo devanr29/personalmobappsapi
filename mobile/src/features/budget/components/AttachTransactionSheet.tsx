@@ -1,9 +1,9 @@
 import { CheckSquare, Square } from "phosphor-react-native";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView } from "react-native";
 
-import { GlassSurface } from "@/components/GlassSurface";
 import { ApiError } from "@/api/client";
+import { BottomSheet } from "@/components/BottomSheet";
 import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
@@ -174,145 +174,141 @@ export function AttachTransactionSheet({ visible, onClose, onAttached, target, m
   const totalLabel = target.kind === "category" ? "Spent" : "Selected";
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-        <GlassSurface
-          style={{ borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg, maxHeight: "82%" }}
-        >
-          <Stack p={4} gap={3}>
-            <Stack gap={1}>
-              <Text variant="heading">{spendMode ? "Add to spend" : "Attach transactions"}</Text>
-              <Text variant="caption" tone="muted">
-                {subtitle}
-              </Text>
-            </Stack>
+    <BottomSheet visible={visible} onClose={onClose} dismissDisabled={submitting} maxHeight="82%">
+      <Stack p={4} gap={3}>
+        <Stack gap={1}>
+          <Text variant="heading">{spendMode ? "Add to spend" : "Attach transactions"}</Text>
+          <Text variant="caption" tone="muted">
+            {subtitle}
+          </Text>
+        </Stack>
 
-            {loading ? (
-              <Stack py={6} align="center">
-                <ActivityIndicator size="small" color={theme.colors.accent} />
-              </Stack>
-            ) : items.length === 0 && !error ? (
-              <Text variant="label" tone="muted">
-                No expenses to attach.
-              </Text>
-            ) : (
-              <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
-                <Stack gap={2}>
-                  {items.map((txn) => {
-                    const checked = selectedIds.has(txn.id);
-                    const label = txn.note || txn.categoryName || "Transaction";
-                    return (
-                      <PressableScale
-                        key={txn.id}
-                        onPress={() => toggle(txn.id)}
-                        disabled={submitting || question !== null}
-                        accessibilityRole="checkbox"
-                        accessibilityState={{ checked }}
-                        accessibilityLabel={`${label}, ${formatRupiah(txn.amount)}`}
-                      >
-                        <Box
-                          p={3}
-                          radius="md"
-                          bg={theme.colors.bg}
-                          style={{ borderWidth: 1, borderColor: checked ? theme.colors.accent : theme.colors.divider }}
-                        >
-                          <HStack align="center" gap={3}>
-                            {checked ? (
-                              <CheckSquare size={18} color={theme.colors.accent} weight="fill" />
-                            ) : (
-                              <Square size={18} color={theme.colors.neutral[500]} />
-                            )}
-                            <Stack flex={1} gap={0.5}>
-                              <Text variant="body">{label}</Text>
-                              <Text variant="caption" tone="faint">
-                                {[txn.categoryName, txn.walletName, formatBudgetDayHeader(txn.occurredAt)].filter(Boolean).join(" · ")}
-                              </Text>
-                            </Stack>
-                            <Text variant="body" numeric style={{ color: theme.colors.neutral[300] }}>
-                              {formatRupiah(txn.amount)}
-                            </Text>
-                          </HStack>
-                        </Box>
-                      </PressableScale>
-                    );
-                  })}
-                </Stack>
-              </ScrollView>
-            )}
-
-            {error ? (
-              <Text variant="label" tone="negative">
-                {error}
-              </Text>
-            ) : null}
-            {notice ? (
-              <Text variant="label" tone="muted">
-                {notice}
-              </Text>
-            ) : null}
-
-            {question ? (
-              <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
-                {question.step === "change" ? (
-                  <Stack gap={2}>
-                    <Text variant="label">Amount differs</Text>
-                    <Text variant="caption" tone="muted">
-                      {totalLabel} {formatRupiah(question.total)} ≠ {target.name}&rsquo;s {amountLabel}{" "}
-                      {formatRupiah(question.amount)}. Change the {amountLabel}?
-                    </Text>
-                    <HStack justify="flex-end" gap={2}>
-                      <SheetButton label="No" onPress={declineChange} />
-                      <SheetButton
-                        label="Yes"
-                        primary
-                        onPress={() => setQuestion({ ...question, step: "scope" })}
-                      />
-                    </HStack>
-                  </Stack>
-                ) : (
-                  <Stack gap={2}>
-                    <Text variant="label">Apply {formatRupiah(question.total)} to:</Text>
-                    <HStack justify="flex-end" gap={2} wrap>
-                      <SheetButton label="Cancel" onPress={declineChange} disabled={submitting} />
-                      <SheetButton label="This period only" onPress={() => submit("period")} disabled={submitting} />
-                      <SheetButton label="Permanently" primary onPress={() => submit("permanent")} disabled={submitting} />
-                    </HStack>
-                  </Stack>
-                )}
-              </Box>
-            ) : null}
-
-            <HStack align="center" justify="space-between" gap={3}>
-              <Text variant="caption" tone="muted" numeric style={{ flex: 1 }}>
-                {spendMode
-                  ? `${selected.length} selected · ${formatRupiah(previewTotal)} of ${formatRupiah(target.amount)} · ${
-                      previewTotal > target.amount
-                        ? `over by ${formatRupiah(previewTotal - target.amount)}`
-                        : `${formatRupiah(target.amount - previewTotal)} left`
-                    }`
-                  : `${selected.length} selected · ${formatRupiah(previewTotal)}${target.kind === "category" ? " spent" : ""} vs ${formatRupiah(target.amount)}`}
-              </Text>
-              <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
-                <Box py={2} px={3}>
-                  <Text variant="label" tone="muted">
-                    Close
-                  </Text>
-                </Box>
-              </Pressable>
-              {question === null ? (
-                <SheetButton
-                  label={spendMode ? "Add to spend" : "Attach & mark paid"}
-                  primary
-                  pending={submitting}
-                  disabled={selected.length === 0 || submitting}
-                  onPress={() => submit()}
-                />
-              ) : null}
-            </HStack>
+        {loading ? (
+          <Stack py={6} align="center">
+            <ActivityIndicator size="small" color={theme.colors.accent} />
           </Stack>
-        </GlassSurface>
-      </View>
-    </Modal>
+        ) : items.length === 0 && !error ? (
+          <Text variant="label" tone="muted">
+            No expenses to attach.
+          </Text>
+        ) : (
+          <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
+            <Stack gap={2}>
+              {items.map((txn) => {
+                const checked = selectedIds.has(txn.id);
+                const label = txn.note || txn.categoryName || "Transaction";
+                return (
+                  <PressableScale
+                    key={txn.id}
+                    onPress={() => toggle(txn.id)}
+                    disabled={submitting || question !== null}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked }}
+                    accessibilityLabel={`${label}, ${formatRupiah(txn.amount)}`}
+                  >
+                    <Box
+                      p={3}
+                      radius="md"
+                      bg={theme.colors.bg}
+                      style={{ borderWidth: 1, borderColor: checked ? theme.colors.accent : theme.colors.divider }}
+                    >
+                      <HStack align="center" gap={3}>
+                        {checked ? (
+                          <CheckSquare size={18} color={theme.colors.accent} weight="fill" />
+                        ) : (
+                          <Square size={18} color={theme.colors.neutral[500]} />
+                        )}
+                        <Stack flex={1} gap={0.5}>
+                          <Text variant="body">{label}</Text>
+                          <Text variant="caption" tone="faint">
+                            {[txn.categoryName, txn.walletName, formatBudgetDayHeader(txn.occurredAt)].filter(Boolean).join(" · ")}
+                          </Text>
+                        </Stack>
+                        <Text variant="body" numeric style={{ color: theme.colors.neutral[300] }}>
+                          {formatRupiah(txn.amount)}
+                        </Text>
+                      </HStack>
+                    </Box>
+                  </PressableScale>
+                );
+              })}
+            </Stack>
+          </ScrollView>
+        )}
+
+        {error ? (
+          <Text variant="label" tone="negative">
+            {error}
+          </Text>
+        ) : null}
+        {notice ? (
+          <Text variant="label" tone="muted">
+            {notice}
+          </Text>
+        ) : null}
+
+        {question ? (
+          <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
+            {question.step === "change" ? (
+              <Stack gap={2}>
+                <Text variant="label">Amount differs</Text>
+                <Text variant="caption" tone="muted">
+                  {totalLabel} {formatRupiah(question.total)} ≠ {target.name}&rsquo;s {amountLabel}{" "}
+                  {formatRupiah(question.amount)}. Change the {amountLabel}?
+                </Text>
+                <HStack justify="flex-end" gap={2}>
+                  <SheetButton label="No" onPress={declineChange} />
+                  <SheetButton
+                    label="Yes"
+                    primary
+                    onPress={() => setQuestion({ ...question, step: "scope" })}
+                  />
+                </HStack>
+              </Stack>
+            ) : (
+              <Stack gap={2}>
+                <Text variant="label">Apply {formatRupiah(question.total)} to:</Text>
+                <HStack justify="flex-end" gap={2} wrap>
+                  <SheetButton label="Cancel" onPress={declineChange} disabled={submitting} />
+                  <SheetButton label="This period only" onPress={() => submit("period")} disabled={submitting} />
+                  <SheetButton label="Permanently" primary onPress={() => submit("permanent")} disabled={submitting} />
+                </HStack>
+              </Stack>
+            )}
+          </Box>
+        ) : null}
+
+        {/* The running total gets its own line: sharing a row with both
+         * buttons left it ~120pt wide on a phone, wrapping to 3-4 lines. */}
+        <Text variant="caption" tone="muted" numeric>
+          {spendMode
+            ? `${selected.length} selected · ${formatRupiah(previewTotal)} of ${formatRupiah(target.amount)} · ${
+                previewTotal > target.amount
+                  ? `over by ${formatRupiah(previewTotal - target.amount)}`
+                  : `${formatRupiah(target.amount - previewTotal)} left`
+              }`
+            : `${selected.length} selected · ${formatRupiah(previewTotal)}${target.kind === "category" ? " spent" : ""} vs ${formatRupiah(target.amount)}`}
+        </Text>
+        <HStack align="center" justify="flex-end" gap={2}>
+          <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
+            <Box py={2} px={3}>
+              <Text variant="label" tone="muted">
+                Close
+              </Text>
+            </Box>
+          </Pressable>
+          {question === null ? (
+            <SheetButton
+              label={spendMode ? "Add to spend" : "Attach & mark paid"}
+              primary
+              pending={submitting}
+              disabled={selected.length === 0 || submitting}
+              onPress={() => submit()}
+            />
+          ) : null}
+        </HStack>
+      </Stack>
+    </BottomSheet>
   );
 }
 

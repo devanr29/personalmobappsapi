@@ -9,6 +9,10 @@ import { formatRupiah } from "@/utils/currency";
 import type { Bill, Wallet } from "../types";
 import { SpendInputRow } from "./SpendInputRow";
 
+// The action rows are caption-sized (~16pt tall); extend the touch area
+// without overlapping the next row 12pt below.
+const ACTION_HIT_SLOP = { top: 6, bottom: 6, left: 8, right: 8 };
+
 export type FixedBudgetCardProps = {
   bill: Bill;
   /** Unpaid this period (present in breakdown.stillOwed) vs already paid — a
@@ -47,9 +51,11 @@ export function FixedBudgetCard({ bill, paidThisPeriod, periodAmount, payPending
     <ExpandableCard
       accessibilityLabel={`${bill.name}, ${paidThisPeriod ? "paid" : "still owed"} this period`}
       header={() => (
-        <HStack align="center" justify="space-between">
+        <HStack align="center" justify="space-between" gap={3}>
           <Stack gap={0.5} style={{ flex: 1 }}>
-            <Text variant="label">{bill.name}</Text>
+            <Text variant="label" numberOfLines={1}>
+              {bill.name}
+            </Text>
             {bill.dueDay != null ? (
               <HStack align="center" gap={1}>
                 <CalendarBlank size={12} color={theme.colors.neutral[500]} />
@@ -66,7 +72,7 @@ export function FixedBudgetCard({ bill, paidThisPeriod, periodAmount, payPending
       )}
     >
       <Stack gap={3}>
-        <PressableScale onPress={onTogglePaid} disabled={payPending} accessibilityRole="button" accessibilityLabel={paidThisPeriod ? "Mark unpaid" : "Mark paid"}>
+        <PressableScale hitSlop={ACTION_HIT_SLOP} onPress={onTogglePaid} disabled={payPending} accessibilityRole="button" accessibilityLabel={paidThisPeriod ? "Mark unpaid" : "Mark paid"}>
           <HStack align="center" gap={1.5}>
             {payPending ? (
               <ActivityIndicator size="small" color={theme.colors.accent} />
@@ -89,6 +95,7 @@ export function FixedBudgetCard({ bill, paidThisPeriod, periodAmount, payPending
               onSubmit={(amount, walletId) => onPayAmount(amount, walletId)}
             />
             <PressableScale
+              hitSlop={ACTION_HIT_SLOP}
               onPress={onAttachTransaction}
               accessibilityRole="button"
               accessibilityLabel={`Attach an existing transaction to ${bill.name}`}
@@ -102,7 +109,7 @@ export function FixedBudgetCard({ bill, paidThisPeriod, periodAmount, payPending
             </PressableScale>
           </>
         ) : null}
-        <PressableScale onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${bill.name}`}>
+        <PressableScale hitSlop={ACTION_HIT_SLOP} onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${bill.name}`}>
           <HStack align="center" gap={1.5}>
             <PencilSimple size={14} color={theme.colors.accent} />
             <Text variant="caption" tone="accent">

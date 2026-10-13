@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { Bell, CheckCircle, Info, Plus, Sun, WarningCircle, XCircle, type Icon } from "phosphor-react-native";
-import { ScrollView, View } from "react-native";
+import { Platform, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AnimatedCurrency } from "@/components/AnimatedCurrency";
@@ -72,6 +72,9 @@ export default function BudgetOverviewScreen() {
   const [attachTarget, setAttachTarget] = useState<AttachTarget | null>(null);
   const [attachMode, setAttachMode] = useState<AttachMode>("pay");
   const [markPaidTarget, setMarkPaidTarget] = useState<AttachTarget | null>(null);
+  // iOS can't present a Modal while another is still animating out, so
+  // MarkPaidSheet's "Attach existing" hands off via its onDismiss there.
+  const queuedAttach = useRef<AttachTarget | null>(null);
 
   const fetcher = useCallback(async (): Promise<OverviewResource> => {
     const [breakdown, bills, categories] = await Promise.all([getBreakdown(), listBills(), listCategories("variable")]);
@@ -332,8 +335,16 @@ export default function BudgetOverviewScreen() {
         onClose={() => setMarkPaidTarget(null)}
         onPaid={handleSaved}
         onChooseAttach={() => {
-          if (markPaidTarget) openAttach(markPaidTarget, "pay");
+          if (markPaidTarget) {
+            if (Platform.OS === "ios") queuedAttach.current = markPaidTarget;
+            else openAttach(markPaidTarget, "pay");
+          }
           setMarkPaidTarget(null);
+        }}
+        onDismiss={() => {
+          const target = queuedAttach.current;
+          queuedAttach.current = null;
+          if (target) openAttach(target, "pay");
         }}
         target={markPaidTarget ?? EMPTY_TARGET}
       />

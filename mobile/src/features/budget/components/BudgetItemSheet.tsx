@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, TextInput } from "react-native";
 import { Trash } from "phosphor-react-native";
 
-import { GlassSurface } from "@/components/GlassSurface";
+import { BottomSheet } from "@/components/BottomSheet";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { ApiError } from "@/api/client";
@@ -128,114 +128,102 @@ export function BudgetItemSheet({ visible, onClose, onSaved, itemKind, editing }
       : "Add variable budget";
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
-      {/* KeyboardAvoidingView must own the full-screen flex box (not sit
-       * inside it) so its height/padding response to the keyboard actually
-       * reflows the flex-end backdrop below it — nested the other way
-       * round, the backdrop's own flex-end just re-anchors to the same
-       * screen bottom and the sheet stays pinned behind the keyboard
-       * instead of floating up to follow it. */}
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-          <GlassSurface style={{ borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg }}>
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <Stack p={4} gap={4}>
-                <Text variant="heading">{title}</Text>
+    <BottomSheet visible={visible} onClose={handleClose} dismissDisabled={submitting}>
+      <ScrollView keyboardShouldPersistTaps="handled">
+        <Stack p={4} gap={4}>
+          <Text variant="heading">{title}</Text>
 
-                <Stack gap={1.5}>
-                  <Text variant="caption" tone="muted">
-                    Name
-                  </Text>
-                  <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
-                    <TextInput
-                      value={name}
-                      onChangeText={setName}
-                      placeholder={isBill ? "e.g. House Rent" : "e.g. Groceries"}
-                      placeholderTextColor={theme.colors.neutral[500]}
-                      style={{ ...theme.type.body, color: theme.colors.text }}
-                      editable={!submitting}
-                      accessibilityLabel="Name"
-                    />
-                  </Box>
-                </Stack>
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              Name
+            </Text>
+            <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
+              <TextInput
+                value={name}
+                onChangeText={setName}
+                placeholder={isBill ? "e.g. House Rent" : "e.g. Groceries"}
+                placeholderTextColor={theme.colors.neutral[500]}
+                style={{ ...theme.type.body, color: theme.colors.text }}
+                editable={!submitting}
+                accessibilityLabel="Name"
+              />
+            </Box>
+          </Stack>
 
-                <Stack gap={1.5}>
-                  <Text variant="caption" tone="muted">
-                    {isBill ? "Amount" : "Monthly limit"}
-                  </Text>
-                  <AmountField rawText={amountText} onChangeRawText={setAmountText} />
-                </Stack>
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              {isBill ? "Amount" : "Monthly limit"}
+            </Text>
+            <AmountField rawText={amountText} onChangeRawText={setAmountText} />
+          </Stack>
 
-                {isBill ? (
-                  <Stack gap={1.5}>
-                    <Text variant="caption" tone="muted">
-                      Due day (optional)
-                    </Text>
-                    <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
-                      <TextInput
-                        value={dueDayText}
-                        onChangeText={setDueDayText}
-                        placeholder="e.g. 25"
-                        placeholderTextColor={theme.colors.neutral[500]}
-                        keyboardType="number-pad"
-                        style={{ ...theme.type.body, color: theme.colors.text }}
-                        editable={!submitting}
-                        accessibilityLabel="Due day"
-                      />
-                    </Box>
-                  </Stack>
-                ) : null}
+          {isBill ? (
+            <Stack gap={1.5}>
+              <Text variant="caption" tone="muted">
+                Due day (optional)
+              </Text>
+              <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
+                <TextInput
+                  value={dueDayText}
+                  onChangeText={setDueDayText}
+                  placeholder="e.g. 25"
+                  placeholderTextColor={theme.colors.neutral[500]}
+                  keyboardType="number-pad"
+                  style={{ ...theme.type.body, color: theme.colors.text }}
+                  editable={!submitting}
+                  accessibilityLabel="Due day"
+                />
+              </Box>
+            </Stack>
+          ) : null}
 
-                {error ? (
+          {error ? (
+            <Text variant="label" tone="negative">
+              {error}
+            </Text>
+          ) : null}
+
+          <HStack align="center" justify="space-between">
+            {isEditing ? (
+              <Pressable onPress={handleDelete} disabled={submitting} accessibilityRole="button" accessibilityLabel="Delete">
+                <HStack align="center" gap={1.5} py={2}>
+                  <Trash size={14} color={theme.status.short} />
                   <Text variant="label" tone="negative">
-                    {error}
+                    Delete
                   </Text>
-                ) : null}
-
-                <HStack align="center" justify="space-between">
-                  {isEditing ? (
-                    <Pressable onPress={handleDelete} disabled={submitting} accessibilityRole="button" accessibilityLabel="Delete">
-                      <HStack align="center" gap={1.5} py={2}>
-                        <Trash size={14} color={theme.status.short} />
-                        <Text variant="label" tone="negative">
-                          Delete
-                        </Text>
-                      </HStack>
-                    </Pressable>
-                  ) : (
-                    <Box />
-                  )}
-                  <HStack justify="flex-end" gap={3}>
-                    <Pressable onPress={handleClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
-                      <Box py={2} px={4}>
-                        <Text variant="label" tone="muted">
-                          Cancel
-                        </Text>
-                      </Box>
-                    </Pressable>
-                    <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
-                      <HStack
-                        align="center"
-                        gap={1.5}
-                        py={2}
-                        px={4}
-                        radius="pill"
-                        bg={theme.colors.accent}
-                        style={{ opacity: canSave ? 1 : 0.5 }}
-                      >
-                        {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
-                        <Text variant="label" style={{ color: theme.colors.bg }}>
-                          Save
-                        </Text>
-                      </HStack>
-                    </Pressable>
-                  </HStack>
                 </HStack>
-              </Stack>
-            </ScrollView>
-          </GlassSurface>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+              </Pressable>
+            ) : (
+              <Box />
+            )}
+            <HStack justify="flex-end" gap={3}>
+              <Pressable onPress={handleClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
+                <Box py={2} px={4}>
+                  <Text variant="label" tone="muted">
+                    Cancel
+                  </Text>
+                </Box>
+              </Pressable>
+              <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
+                <HStack
+                  align="center"
+                  gap={1.5}
+                  py={2}
+                  px={4}
+                  radius="pill"
+                  bg={theme.colors.accent}
+                  style={{ opacity: canSave ? 1 : 0.5 }}
+                >
+                  {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
+                  <Text variant="label" style={{ color: theme.colors.bg }}>
+                    Save
+                  </Text>
+                </HStack>
+              </Pressable>
+            </HStack>
+          </HStack>
+        </Stack>
+      </ScrollView>
+    </BottomSheet>
   );
 }

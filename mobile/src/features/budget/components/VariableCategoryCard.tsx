@@ -10,6 +10,10 @@ import { formatRupiah } from "@/utils/currency";
 import type { BudgetVariableItem, Category, Wallet } from "../types";
 import { SpendInputRow } from "./SpendInputRow";
 
+// The action rows are caption-sized (~16pt tall); extend the touch area
+// without overlapping the next row 12pt below.
+const ACTION_HIT_SLOP = { top: 6, bottom: 6, left: 8, right: 8 };
+
 export type VariableCategoryCardProps = {
   item: BudgetVariableItem;
   category: Category | undefined;
@@ -58,8 +62,10 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
       accessibilityLabel={`${item.name}, ${isOver ? "over budget" : "expand for details"}`}
       header={() => (
         <Stack gap={1.5} style={{ flex: 1 }}>
-          <HStack justify="space-between">
-            <Text variant="label">{item.name}</Text>
+          <HStack justify="space-between" align="baseline" gap={3}>
+            <Text variant="label" numberOfLines={1} style={{ flexShrink: 1 }}>
+              {item.name}
+            </Text>
             <Text variant="meta" numeric style={{ color: isOver ? theme.status.short : theme.colors.neutral[400] }}>
               {isOver ? `Over by ${formatRupiah(item.overBudget)}` : `${formatRupiah(item.remaining)} left`}
             </Text>
@@ -79,7 +85,7 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
         </HStack>
         {item.categoryId != null ? (
           <>
-            <PressableScale onPress={onTogglePaid} disabled={payPending} accessibilityRole="button" accessibilityLabel={item.paid ? "Mark unpaid" : "Mark paid"}>
+            <PressableScale hitSlop={ACTION_HIT_SLOP} onPress={onTogglePaid} disabled={payPending} accessibilityRole="button" accessibilityLabel={item.paid ? "Mark unpaid" : "Mark paid"}>
               <HStack align="center" gap={1.5}>
                 {payPending ? (
                   <ActivityIndicator size="small" color={theme.colors.accent} />
@@ -109,6 +115,7 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
               onSubmit={(amount, walletId) => onLogSpend(amount, walletId)}
             />
             <PressableScale
+              hitSlop={ACTION_HIT_SLOP}
               onPress={onAttachSpend}
               accessibilityRole="button"
               accessibilityLabel={`Add existing transactions to ${item.name}'s spend`}
@@ -122,7 +129,7 @@ export function VariableCategoryCard({ item, category, wallets, payPending, onEd
             </PressableScale>
           </>
         ) : null}
-        <PressableScale onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${item.name}`}>
+        <PressableScale hitSlop={ACTION_HIT_SLOP} onPress={onEdit} accessibilityRole="button" accessibilityLabel={`Edit ${item.name}`}>
           <HStack align="center" gap={1.5}>
             <PencilSimple size={14} color={theme.colors.accent} />
             <Text variant="caption" tone="accent">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, TextInput } from "react-native";
 
-import { GlassSurface } from "@/components/GlassSurface";
+import { BottomSheet } from "@/components/BottomSheet";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
 import { createTransaction, listCategories, listWallets, updateTransaction } from "../api";
@@ -118,114 +118,108 @@ export function TransactionSheet({ visible, onClose, onSaved, editingTransaction
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
-          <GlassSurface style={{ borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg }}>
-            <ScrollView>
-              <Stack p={4} gap={4}>
-                <Text variant="heading">{isEditing ? "Edit transaction" : "Add transaction"}</Text>
+    <BottomSheet visible={visible} onClose={handleClose} dismissDisabled={submitting}>
+      <ScrollView>
+        <Stack p={4} gap={4}>
+          <Text variant="heading">{isEditing ? "Edit transaction" : "Add transaction"}</Text>
 
-                <AmountField rawText={amountText} onChangeRawText={setAmountText} autoFocus />
+          <AmountField rawText={amountText} onChangeRawText={setAmountText} autoFocus />
 
-                <Stack gap={1.5}>
-                  <Text variant="caption" tone="muted">
-                    Type
-                  </Text>
-                  <ChipRow>
-                    {DIRECTIONS.map((d) => (
-                      <Chip key={d.value} label={d.label} selected={d.value === direction} onPress={() => setDirection(d.value)} />
-                    ))}
-                  </ChipRow>
-                </Stack>
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              Type
+            </Text>
+            <ChipRow>
+              {DIRECTIONS.map((d) => (
+                <Chip key={d.value} label={d.label} selected={d.value === direction} onPress={() => setDirection(d.value)} />
+              ))}
+            </ChipRow>
+          </Stack>
 
-                {!isEditing ? (
-                  <Stack gap={1.5}>
-                    <Text variant="caption" tone="muted">
-                      Date
-                    </Text>
-                    <ChipRow>
-                      <Chip label="Today" selected={dateChoice === "today"} onPress={() => setDateChoice("today")} />
-                      <Chip label="Yesterday" selected={dateChoice === "yesterday"} onPress={() => setDateChoice("yesterday")} />
-                    </ChipRow>
-                  </Stack>
-                ) : null}
+          {!isEditing ? (
+            <Stack gap={1.5}>
+              <Text variant="caption" tone="muted">
+                Date
+              </Text>
+              <ChipRow>
+                <Chip label="Today" selected={dateChoice === "today"} onPress={() => setDateChoice("today")} />
+                <Chip label="Yesterday" selected={dateChoice === "yesterday"} onPress={() => setDateChoice("yesterday")} />
+              </ChipRow>
+            </Stack>
+          ) : null}
 
-                <Stack gap={1.5}>
-                  <Text variant="caption" tone="muted">
-                    Category
-                  </Text>
-                  <ChipRow>
-                    {categories.map((c) => (
-                      <Chip key={c.id} label={c.name} selected={c.id === categoryId} onPress={() => setCategoryId(c.id)} />
-                    ))}
-                  </ChipRow>
-                </Stack>
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              Category
+            </Text>
+            <ChipRow>
+              {categories.map((c) => (
+                <Chip key={c.id} label={c.name} selected={c.id === categoryId} onPress={() => setCategoryId(c.id)} />
+              ))}
+            </ChipRow>
+          </Stack>
 
-                <Stack gap={1.5}>
-                  <Text variant="caption" tone="muted">
-                    Wallet
-                  </Text>
-                  <ChipRow>
-                    {wallets.map((w) => (
-                      <Chip key={w.id} label={w.name} selected={w.id === walletId} onPress={() => setWalletId(w.id)} />
-                    ))}
-                  </ChipRow>
-                </Stack>
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              Wallet
+            </Text>
+            <ChipRow>
+              {wallets.map((w) => (
+                <Chip key={w.id} label={w.name} selected={w.id === walletId} onPress={() => setWalletId(w.id)} />
+              ))}
+            </ChipRow>
+          </Stack>
 
-                <Stack gap={1.5}>
-                  <Text variant="caption" tone="muted">
-                    Note
-                  </Text>
-                  <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
-                    <TextInput
-                      value={note}
-                      onChangeText={setNote}
-                      placeholder="Optional"
-                      placeholderTextColor={theme.colors.neutral[500]}
-                      style={{ ...theme.type.body, color: theme.colors.text }}
-                      editable={!submitting}
-                      accessibilityLabel="Note"
-                    />
-                  </Box>
-                </Stack>
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              Note
+            </Text>
+            <Box p={3} radius="md" bg={theme.colors.bg} style={{ borderWidth: 1, borderColor: theme.colors.divider }}>
+              <TextInput
+                value={note}
+                onChangeText={setNote}
+                placeholder="Optional"
+                placeholderTextColor={theme.colors.neutral[500]}
+                style={{ ...theme.type.body, color: theme.colors.text }}
+                editable={!submitting}
+                accessibilityLabel="Note"
+              />
+            </Box>
+          </Stack>
 
-                {error ? (
-                  <Text variant="label" tone="negative">
-                    {error}
-                  </Text>
-                ) : null}
+          {error ? (
+            <Text variant="label" tone="negative">
+              {error}
+            </Text>
+          ) : null}
 
-                <HStack justify="flex-end" gap={3}>
-                  <Pressable onPress={handleClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
-                    <Box py={2} px={4}>
-                      <Text variant="label" tone="muted">
-                        Cancel
-                      </Text>
-                    </Box>
-                  </Pressable>
-                  <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
-                    <HStack
-                      align="center"
-                      gap={1.5}
-                      py={2}
-                      px={4}
-                      radius="pill"
-                      bg={theme.colors.accent}
-                      style={{ opacity: canSave ? 1 : 0.5 }}
-                    >
-                      {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
-                      <Text variant="label" style={{ color: theme.colors.bg }}>
-                        Save
-                      </Text>
-                    </HStack>
-                  </Pressable>
-                </HStack>
-              </Stack>
-            </ScrollView>
-          </GlassSurface>
-        </KeyboardAvoidingView>
-      </View>
-    </Modal>
+          <HStack justify="flex-end" gap={3}>
+            <Pressable onPress={handleClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
+              <Box py={2} px={4}>
+                <Text variant="label" tone="muted">
+                  Cancel
+                </Text>
+              </Box>
+            </Pressable>
+            <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
+              <HStack
+                align="center"
+                gap={1.5}
+                py={2}
+                px={4}
+                radius="pill"
+                bg={theme.colors.accent}
+                style={{ opacity: canSave ? 1 : 0.5 }}
+              >
+                {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
+                <Text variant="label" style={{ color: theme.colors.bg }}>
+                  Save
+                </Text>
+              </HStack>
+            </Pressable>
+          </HStack>
+        </Stack>
+      </ScrollView>
+    </BottomSheet>
   );
 }

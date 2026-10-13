@@ -1,9 +1,9 @@
 import { CheckCircle, Paperclip, Receipt, type Icon } from "phosphor-react-native";
 import { useState } from "react";
-import { ActivityIndicator, Modal, Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable } from "react-native";
 
-import { GlassSurface } from "@/components/GlassSurface";
 import { ApiError } from "@/api/client";
+import { BottomSheet } from "@/components/BottomSheet";
 import { PressableScale } from "@/theme/motion";
 import { Box, HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
@@ -20,6 +20,8 @@ export type MarkPaidSheetProps = {
    * AttachTransactionSheet for the same target. */
   onChooseAttach: () => void;
   target: AttachTarget;
+  /** iOS: fired once the sheet has fully closed — see BottomSheet. */
+  onDismiss?: () => void;
 };
 
 type Option = "markOnly" | "withTransaction";
@@ -33,8 +35,7 @@ type Option = "markOnly" | "withTransaction";
  *    bill amount (or what's left of the category) as a new expense.
  *  - Attach existing transaction(s): settles it with expenses already in
  *    the ledger, via AttachTransactionSheet. */
-export function MarkPaidSheet({ visible, onClose, onPaid, onChooseAttach, target }: MarkPaidSheetProps) {
-  const theme = useTheme();
+export function MarkPaidSheet({ visible, onClose, onPaid, onChooseAttach, target, onDismiss }: MarkPaidSheetProps) {
   const [pending, setPending] = useState<Option | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,55 +71,51 @@ export function MarkPaidSheet({ visible, onClose, onPaid, onChooseAttach, target
       : `Logs a ${formatRupiah(target.amount)} expense from the bill's wallet.`;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-        <GlassSurface style={{ borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg }}>
-          <Stack p={4} gap={3}>
-            <Text variant="heading">Mark {target.name} as paid</Text>
+    <BottomSheet visible={visible} onClose={onClose} dismissDisabled={pending !== null} onDismiss={onDismiss}>
+      <Stack p={4} gap={3}>
+        <Text variant="heading">Mark {target.name} as paid</Text>
 
-            <OptionRow
-              IconComponent={CheckCircle}
-              title="Just mark as paid"
-              detail="No transaction is added and your balance doesn't change."
-              pending={pending === "markOnly"}
-              disabled={pending !== null}
-              onPress={() => pay("markOnly")}
-            />
-            <OptionRow
-              IconComponent={Receipt}
-              title="Mark paid & add a transaction"
-              detail={withTransactionDetail}
-              pending={pending === "withTransaction"}
-              disabled={pending !== null}
-              onPress={() => pay("withTransaction")}
-            />
-            <OptionRow
-              IconComponent={Paperclip}
-              title="Attach existing transactions…"
-              detail="Pick expenses already in your ledger, without logging duplicates."
-              disabled={pending !== null}
-              onPress={onChooseAttach}
-            />
+        <OptionRow
+          IconComponent={CheckCircle}
+          title="Just mark as paid"
+          detail="No transaction is added and your balance doesn't change."
+          pending={pending === "markOnly"}
+          disabled={pending !== null}
+          onPress={() => pay("markOnly")}
+        />
+        <OptionRow
+          IconComponent={Receipt}
+          title="Mark paid & add a transaction"
+          detail={withTransactionDetail}
+          pending={pending === "withTransaction"}
+          disabled={pending !== null}
+          onPress={() => pay("withTransaction")}
+        />
+        <OptionRow
+          IconComponent={Paperclip}
+          title="Attach existing transactions…"
+          detail="Pick expenses already in your ledger, without logging duplicates."
+          disabled={pending !== null}
+          onPress={onChooseAttach}
+        />
 
-            {error ? (
-              <Text variant="label" tone="negative">
-                {error}
+        {error ? (
+          <Text variant="label" tone="negative">
+            {error}
+          </Text>
+        ) : null}
+
+        <HStack justify="flex-end">
+          <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Cancel">
+            <Box py={2} px={4}>
+              <Text variant="label" tone="muted">
+                Cancel
               </Text>
-            ) : null}
-
-            <HStack justify="flex-end">
-              <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Cancel">
-                <Box py={2} px={4}>
-                  <Text variant="label" tone="muted">
-                    Cancel
-                  </Text>
-                </Box>
-              </Pressable>
-            </HStack>
-          </Stack>
-        </GlassSurface>
-      </View>
-    </Modal>
+            </Box>
+          </Pressable>
+        </HStack>
+      </Stack>
+    </BottomSheet>
   );
 }
 

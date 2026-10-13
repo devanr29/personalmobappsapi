@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { PiggyBank, Plus } from "phosphor-react-native";
-import { ActivityIndicator, Modal, Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { FAB } from "@/components/FAB";
-import { GlassSurface } from "@/components/GlassSurface";
+import { BottomSheet } from "@/components/BottomSheet";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { Skeleton } from "@/components/Skeleton";
 import { Meter, clamp01 } from "@/components/charts";
@@ -147,40 +147,36 @@ function CreateGoalSheet({ visible, onClose, onSaved }: { visible: boolean; onCl
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={submitting ? undefined : onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-        <GlassSurface style={{ borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg }}>
-          <Stack p={4} gap={4}>
-            <Text variant="heading">New goal</Text>
-            <FormField value={name} onChangeText={setName} placeholder="Name (e.g. Emergency fund)" />
-            <FormField value={targetText} onChangeText={setTargetText} placeholder="Target amount (e.g. 5jt)" />
-            <FormField value={monthlyText} onChangeText={setMonthlyText} placeholder="Reserve per period, optional (e.g. 200rb)" />
-            {error ? (
-              <Text variant="label" tone="negative">
-                {error}
+    <BottomSheet visible={visible} onClose={onClose} dismissDisabled={submitting}>
+      <Stack p={4} gap={4}>
+        <Text variant="heading">New goal</Text>
+        <FormField value={name} onChangeText={setName} placeholder="Name (e.g. Emergency fund)" />
+        <FormField value={targetText} onChangeText={setTargetText} placeholder="Target amount (e.g. 5jt)" />
+        <FormField value={monthlyText} onChangeText={setMonthlyText} placeholder="Reserve per period, optional (e.g. 200rb)" />
+        {error ? (
+          <Text variant="label" tone="negative">
+            {error}
+          </Text>
+        ) : null}
+        <HStack justify="flex-end" gap={3}>
+          <Pressable onPress={onClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
+            <Stack py={2} px={4}>
+              <Text variant="label" tone="muted">
+                Cancel
               </Text>
-            ) : null}
-            <HStack justify="flex-end" gap={3}>
-              <Pressable onPress={onClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
-                <Stack py={2} px={4}>
-                  <Text variant="label" tone="muted">
-                    Cancel
-                  </Text>
-                </Stack>
-              </Pressable>
-              <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
-                <HStack align="center" gap={1.5} py={2} px={4} radius="pill" bg={theme.colors.accent} style={{ opacity: canSave ? 1 : 0.5 }}>
-                  {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
-                  <Text variant="label" style={{ color: theme.colors.bg }}>
-                    Save
-                  </Text>
-                </HStack>
-              </Pressable>
+            </Stack>
+          </Pressable>
+          <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
+            <HStack align="center" gap={1.5} py={2} px={4} radius="pill" bg={theme.colors.accent} style={{ opacity: canSave ? 1 : 0.5 }}>
+              {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
+              <Text variant="label" style={{ color: theme.colors.bg }}>
+                Save
+              </Text>
             </HStack>
-          </Stack>
-        </GlassSurface>
-      </View>
-    </Modal>
+          </Pressable>
+        </HStack>
+      </Stack>
+    </BottomSheet>
   );
 }
 
@@ -224,63 +220,59 @@ function ContributeSheet({ goal, onClose, onSaved }: { goal: Goal | null; onClos
   };
 
   return (
-    <Modal visible={!!goal} animationType="slide" transparent onRequestClose={submitting ? undefined : onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-        <GlassSurface style={{ borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg }}>
-          <Stack p={4} gap={4}>
-            <Text variant="heading">Contribute to {goal?.name}</Text>
-            <FormField value={amountText} onChangeText={setAmountText} placeholder="Amount (e.g. 200rb)" />
-            {wallets.length > 0 ? (
-              <Stack gap={1.5}>
-                <Text variant="caption" tone="muted">
-                  From wallet
-                </Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <HStack gap={2}>
-                    {wallets.map((w) => (
-                      <Pressable key={w.id} onPress={() => setWalletId(w.id)} accessibilityRole="button" accessibilityLabel={w.name}>
-                        <Stack
-                          py={1.5}
-                          px={3}
-                          radius="pill"
-                          bg={walletId === w.id ? theme.colors.accentRamp[900] : theme.colors.neutral[800]}
-                        >
-                          <Text variant="label" tone={walletId === w.id ? "accent" : "secondary"}>
-                            {w.name}
-                          </Text>
-                        </Stack>
-                      </Pressable>
-                    ))}
-                  </HStack>
-                </ScrollView>
-              </Stack>
-            ) : null}
-            {error ? (
-              <Text variant="label" tone="negative">
-                {error}
-              </Text>
-            ) : null}
-            <HStack justify="flex-end" gap={3}>
-              <Pressable onPress={onClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
-                <Stack py={2} px={4}>
-                  <Text variant="label" tone="muted">
-                    Cancel
-                  </Text>
-                </Stack>
-              </Pressable>
-              <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
-                <HStack align="center" gap={1.5} py={2} px={4} radius="pill" bg={theme.colors.accent} style={{ opacity: canSave ? 1 : 0.5 }}>
-                  {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
-                  <Text variant="label" style={{ color: theme.colors.bg }}>
-                    Save
-                  </Text>
-                </HStack>
-              </Pressable>
-            </HStack>
+    <BottomSheet visible={!!goal} onClose={onClose} dismissDisabled={submitting}>
+      <Stack p={4} gap={4}>
+        <Text variant="heading">Contribute to {goal?.name}</Text>
+        <FormField value={amountText} onChangeText={setAmountText} placeholder="Amount (e.g. 200rb)" />
+        {wallets.length > 0 ? (
+          <Stack gap={1.5}>
+            <Text variant="caption" tone="muted">
+              From wallet
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <HStack gap={2}>
+                {wallets.map((w) => (
+                  <Pressable key={w.id} onPress={() => setWalletId(w.id)} accessibilityRole="button" accessibilityLabel={w.name}>
+                    <Stack
+                      py={1.5}
+                      px={3}
+                      radius="pill"
+                      bg={walletId === w.id ? theme.colors.accentRamp[900] : theme.colors.neutral[800]}
+                    >
+                      <Text variant="label" tone={walletId === w.id ? "accent" : "secondary"}>
+                        {w.name}
+                      </Text>
+                    </Stack>
+                  </Pressable>
+                ))}
+              </HStack>
+            </ScrollView>
           </Stack>
-        </GlassSurface>
-      </View>
-    </Modal>
+        ) : null}
+        {error ? (
+          <Text variant="label" tone="negative">
+            {error}
+          </Text>
+        ) : null}
+        <HStack justify="flex-end" gap={3}>
+          <Pressable onPress={onClose} disabled={submitting} accessibilityRole="button" accessibilityLabel="Cancel">
+            <Stack py={2} px={4}>
+              <Text variant="label" tone="muted">
+                Cancel
+              </Text>
+            </Stack>
+          </Pressable>
+          <Pressable onPress={handleSave} disabled={!canSave} accessibilityRole="button" accessibilityLabel="Save">
+            <HStack align="center" gap={1.5} py={2} px={4} radius="pill" bg={theme.colors.accent} style={{ opacity: canSave ? 1 : 0.5 }}>
+              {submitting ? <ActivityIndicator size="small" color={theme.colors.bg} /> : null}
+              <Text variant="label" style={{ color: theme.colors.bg }}>
+                Save
+              </Text>
+            </HStack>
+          </Pressable>
+        </HStack>
+      </Stack>
+    </BottomSheet>
   );
 }
 
