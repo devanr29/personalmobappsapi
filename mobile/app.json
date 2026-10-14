@@ -18,7 +18,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.devanr29.mobile"
+      "package": "com.devanr29.mobile",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
@@ -34,7 +35,13 @@
           "imageWidth": 76
         }
       ],
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

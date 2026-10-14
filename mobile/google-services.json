@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "220782769383",
+    "project_id": "mobapps-53f3c",
+    "storage_bucket": "mobapps-53f3c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:220782769383:android:160154ab8faa1ae17c1e42",
+        "android_client_info": {
+          "package_name": "com.devanr29.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCS-Pg4FpFopSO4zkgHibBYS8wGEewBX2w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
