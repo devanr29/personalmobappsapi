@@ -108,8 +108,9 @@ def get_quote_of_day() -> dict:
 @trace
 def send_scheduled_quote(label: str | None = None):
     """Send an auto-scheduled quote via Expo push (called by scheduler) and
-    make it the Home Quote card's quote.
-    Without a label, the title is chosen from the current WIB hour."""
+    make it the Home Quote card's quote. The title is the quote's author;
+    the label (chosen from the current WIB hour when omitted) is the title
+    only when there is no author, and is used in logs."""
     if label is None:
         hour = now_jkt().hour
         if hour == 6:
@@ -123,11 +124,13 @@ def send_scheduled_quote(label: str | None = None):
         if raw:
             quote, author = raw.get("quote", ""), raw.get("author", "Unknown")
             _save_quote_of_day(quote, author)
-            body = f"{_italic(quote)}\n— {author}"
+            title = author if author and author != "Unknown" else label
+            body = _italic(quote)
         else:
+            title = label
             body = _italic("Keep going — every step forward counts, no matter how small.")
         from push import send_push_notification
-        if send_push_notification(label, body):
+        if send_push_notification(title, body):
             print(f"[Quote scheduler] {label} quote sent successfully.")
         else:
             print(f"[Quote scheduler] {label} quote not delivered.")

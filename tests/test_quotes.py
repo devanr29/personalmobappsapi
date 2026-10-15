@@ -11,7 +11,7 @@ def test_scheduled_quote_becomes_home_card_quote():
          patch("push.send_push_notification", return_value=True) as push:
         quotes.send_scheduled_quote("Title")
 
-    push.assert_called_once_with("Title", "\U0001D6181\n— A1")
+    push.assert_called_once_with("A1", "\U0001D6181")
 
     with patch.object(quotes, "state_get", side_effect=store.get), \
          patch.object(quotes, "_fetch_ninja_quote") as fetch:
@@ -25,3 +25,11 @@ def test_failed_fetch_keeps_existing_card_quote():
          patch("push.send_push_notification", return_value=True):
         quotes.send_scheduled_quote("Title")
     state_set.assert_not_called()
+
+
+def test_title_falls_back_to_label_without_author():
+    with patch.object(quotes, "state_set"), \
+         patch.object(quotes, "_fetch_ninja_quote", return_value={"quote": "Q", "author": ""}), \
+         patch("push.send_push_notification", return_value=True) as push:
+        quotes.send_scheduled_quote("Title")
+    assert push.call_args.args[0] == "Title"
