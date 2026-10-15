@@ -60,19 +60,18 @@ def numbers_grounded(reply: str, facts: list) -> bool:
         allowed_exact.update(exact)
         allowed_short.update(short)
         allowed_pct.update(pct)
-    allowed_money = allowed_exact | allowed_short
+    return not ungrounded_figures(reply, allowed_exact | allowed_short, allowed_pct)
 
+
+def ungrounded_figures(reply: str, allowed_money: set, allowed_pct: set) -> list:
+    """Figures quoted in `reply` that match nothing allowed — money exactly
+    (shorthand within tolerance), percentages within one point."""
     exact, short, pct = extract_figures(reply)
-    for value in exact:
-        if value not in allowed_money:
-            return False
-    for value in short:
-        if not any(abs(value - a) <= max(a, 1) * _SHORTHAND_TOLERANCE for a in allowed_money):
-            return False
-    for value in pct:
-        if not any(abs(value - a) <= 1 for a in allowed_pct):
-            return False
-    return True
+    bad = [v for v in exact if v not in allowed_money]
+    bad += [v for v in short
+            if not any(abs(v - a) <= max(a, 1) * _SHORTHAND_TOLERANCE for a in allowed_money)]
+    bad += [f"{v}%" for v in pct if not any(abs(v - a) <= 1 for a in allowed_pct)]
+    return bad
 
 
 def narrate(facts: list, instruction: str, max_tokens: int = 400):

@@ -62,7 +62,8 @@ export function getAiInsights(refresh = false) {
 }
 
 export function askBudget(question: string) {
-  return apiClient.post<AiAnswer | null>("/api/budget/ask", { question });
+  // The agent may take several model rounds plus a fallback pass.
+  return apiClient.post<AiAnswer | null>("/api/budget/ask", { question }, { timeoutMs: LONG_REQUEST_TIMEOUT_MS });
 }
 
 export function getCategoryPatterns(months = 12) {

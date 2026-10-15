@@ -25,6 +25,7 @@ MODEL_EMBED      = "gemini-embedding-2-preview"    # Gemini Embedding 2  — sem
 MODEL_BRAINSTORM = "gemini-3-flash-preview"         # Gemini 3 Flash      — brainstorming
 MODEL_GROQ       = "llama-3.1-8b-instant"           # Groq                — primary (classifier, chat, parsers)
 MODEL_FALLBACK   = "gemini-3.1-flash-lite-preview"  # Gemini Flash Lite   — fallback if Groq errors
+MODEL_BUDGET_AGENT = "gemini-3-flash-preview"       # Gemini 3 Flash      — budget Q&A tool-calling agent
 
 # ================================================================
 # AI CLIENTS

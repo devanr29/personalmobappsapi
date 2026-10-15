@@ -1,4 +1,9 @@
-"""Free-form budget questions, answered from the ledger. Three steps:
+"""Free-form budget questions, answered from the ledger.
+
+agent.py answers first: a Gemini tool-calling loop over read-only lookups
+and a calculator, so any budget question can be answered. When it can't
+produce a grounded answer (model down, timeout, ungrounded figures), the
+fixed menu below answers instead, in three steps:
 
 1. plan    — the model maps the question onto ONE entry of a fixed query
              menu (_QUERIES) as JSON. Nothing on the menu writes, so the
@@ -16,6 +21,7 @@ import re
 
 from ai.groq_client import groq_complete
 from features.budget import repo
+from features.budget.ai import agent
 from features.budget.ai import facts as facts_mod
 from features.budget.ai import llm
 from features.budget.ai.facts import fmt_rp
@@ -246,6 +252,10 @@ def answer(question: str):
     view = service.build_period_view()
     if view is None:
         return None
+    result = agent.answer(question, view=view)
+    if result is not None:
+        return result
+
     insights = service.build_insights()
     history = service.build_insights_history(periods=6)
     patterns = service.build_category_patterns(months=6)

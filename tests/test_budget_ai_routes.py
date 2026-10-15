@@ -24,11 +24,16 @@ def budget_env(tmp_path, monkeypatch):
     import features.budget.service as service_module
     import features.budget.ai.llm as llm_module
     import features.budget.ai.summary as summary_module
+    import features.budget.ai.agent as agent_module
     import features.budget.ai.qa as qa_module
     modules = (db_module, schema_module, database_module, repo_module, periods_module,
-               compute_module, insights_module, service_module, llm_module, summary_module, qa_module)
+               compute_module, insights_module, service_module, llm_module, summary_module,
+               agent_module, qa_module)
     for m in modules:
         importlib.reload(m)
+    # These tests cover the fixed-menu path, which only runs when the agent
+    # gives up; tests/test_budget_ai_agent.py covers the agent itself.
+    monkeypatch.setattr(agent_module, "answer", lambda question, view=None: None)
 
     database_module.init_db()
     yield {"repo": repo_module, "service": service_module, "llm": llm_module,
