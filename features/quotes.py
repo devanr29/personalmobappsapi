@@ -43,6 +43,19 @@ def _fetch_ninja_quote(categories: str = "") -> dict | None:
         print(f"[API Ninjas quote error] {e}")
     return None
 
+def _italic(text: str) -> str:
+    """Push bodies are plain text, so markdown italics show up as literal
+    underscores. Map ASCII letters to Unicode sans-serif italic instead."""
+    out = []
+    for ch in text:
+        if "A" <= ch <= "Z":
+            out.append(chr(0x1D608 + ord(ch) - ord("A")))
+        elif "a" <= ch <= "z":
+            out.append(chr(0x1D622 + ord(ch) - ord("a")))
+        else:
+            out.append(ch)
+    return "".join(out)
+
 @trace
 def _pick_category(context: str) -> str:
     lower = context.lower()
@@ -110,9 +123,9 @@ def send_scheduled_quote(label: str | None = None):
         if raw:
             quote, author = raw.get("quote", ""), raw.get("author", "Unknown")
             _save_quote_of_day(quote, author)
-            body = f"_{quote}_\n{author}"
+            body = f"{_italic(quote)}\n— {author}"
         else:
-            body = "*Keep going — every step forward counts, no matter how small.*"
+            body = _italic("Keep going — every step forward counts, no matter how small.")
         from push import send_push_notification
         if send_push_notification(label, body):
             print(f"[Quote scheduler] {label} quote sent successfully.")

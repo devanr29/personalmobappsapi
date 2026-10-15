@@ -11,7 +11,7 @@ def test_scheduled_quote_becomes_home_card_quote():
          patch("push.send_push_notification", return_value=True) as push:
         quotes.send_scheduled_quote("Title")
 
-    push.assert_called_once_with("Title", "_Q1_\nA1")
+    push.assert_called_once_with("Title", "\U0001D6181\n— A1")
 
     with patch.object(quotes, "state_get", side_effect=store.get), \
          patch.object(quotes, "_fetch_ninja_quote") as fetch:
