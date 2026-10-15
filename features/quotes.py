@@ -63,10 +63,16 @@ def generate_daily_quote(context: str = "") -> str:
     author = raw.get("author", "Unknown")
     return f"_{quote}_\n{author}"
 
+def _save_quote_of_day(quote: str, author: str):
+    today = now_jkt().strftime("%Y-%m-%d")
+    state_set("quote_of_day", json.dumps({"date": today, "quote": quote, "author": author}))
+
 @trace
 def get_quote_of_day() -> dict:
-    """Stable once-a-day quote for Home's Quote card. Chat's on-demand
-    'give me a quote' intent keeps using fresh generate_daily_quote()."""
+    """Quote for Home's Quote card: the latest quote the scheduler pushed,
+    so the card matches the notification. Falls back to fetching one when
+    nothing was pushed today. Chat's on-demand 'give me a quote' intent
+    keeps using fresh generate_daily_quote()."""
     today = now_jkt().strftime("%Y-%m-%d")
     cached = state_get("quote_of_day")
     if cached:
@@ -83,12 +89,13 @@ def get_quote_of_day() -> dict:
     else:
         quote, author = "Keep going — every step forward counts, no matter how small.", ""
 
-    state_set("quote_of_day", json.dumps({"date": today, "quote": quote, "author": author}))
+    _save_quote_of_day(quote, author)
     return {"quote": quote, "author": author}
 
 @trace
 def send_scheduled_quote(label: str | None = None):
-    """Send an auto-scheduled quote via Expo push (called by scheduler).
+    """Send an auto-scheduled quote via Expo push (called by scheduler) and
+    make it the Home Quote card's quote.
     Without a label, the title is chosen from the current WIB hour."""
     if label is None:
         hour = now_jkt().hour
@@ -99,7 +106,13 @@ def send_scheduled_quote(label: str | None = None):
         else:
             label = "Quote of the Moment ✨"
     try:
-        body = generate_daily_quote()
+        raw = _fetch_ninja_quote("inspirational") or _fetch_ninja_quote()
+        if raw:
+            quote, author = raw.get("quote", ""), raw.get("author", "Unknown")
+            _save_quote_of_day(quote, author)
+            body = f"_{quote}_\n{author}"
+        else:
+            body = "*Keep going — every step forward counts, no matter how small.*"
         from push import send_push_notification
         if send_push_notification(label, body):
             print(f"[Quote scheduler] {label} quote sent successfully.")
