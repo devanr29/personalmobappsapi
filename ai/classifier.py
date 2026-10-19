@@ -23,6 +23,7 @@ Classify the user's message into exactly ONE of these intents:
   get_events    — VIEW, check, look up, or list existing calendar events
   search_memory — ask about something that might be in their notes/ideas
   quote         — ask for a motivational/inspirational quote (e.g. "give me a quote", "motivate me", "quote of the day", "inspire me")
+  quran         — ask for a Quran verse / ayat, optionally about a topic or a specific surah:ayah (e.g. "give me a verse", "ayat tentang sabar", "quran verse about patience", "explain 2:255"). Put the topic, as ONE English word (e.g. "patience", "mercy", "parents"), in params.keyword; leave keyword absent when no topic is given.
   budget        — ASK about the current budget state: how much money is left, how much per day, what's still owed, how many days to payday / sisa uang / berapa sisa per hari / sisa budget. Read-only — the assistant reports live numbers from the budget ledger and never records or changes anything. Managing wallets, categories, bills, or transactions happens only in the Budget tab, not via chat.
   budget_question — ANALYZE the user's own budget data: comparisons, breakdowns, trends, what-ifs, "can I afford X", "how much did I spend on food", "food vs last month", "where is my money going", "biggest expenses", "how am I doing this month", "berapa pengeluaran makan bulan ini". Read-only, answered from the ledger.
   delete_note   — DELETE or REMOVE a saved note by number or keyword (e.g. "delete note 2", "hapus note fix the logs")

@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { BudgetProvider } from '@/features/budget/BudgetProvider';
 import { registerForPushNotifications } from '@/notifications/registerPush';
+import { useNotificationRouting } from '@/notifications/useNotificationRouting';
 import { SettingsProvider, useSettings } from '@/theme/SettingsProvider';
 import { ThemeProvider as AppThemeProvider } from '@/theme/ThemeProvider';
 import { useAppFonts } from '@/theme/fonts';
@@ -64,7 +65,15 @@ function ThemedApp() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
         </Stack>
+        <NotificationRouting />
       </ThemeProvider>
     </AppThemeProvider>
   );
+}
+
+// Rendered next to the navigator (not above it) so router.push only runs
+// once the Stack has mounted.
+function NotificationRouting() {
+  useNotificationRouting();
+  return null;
 }

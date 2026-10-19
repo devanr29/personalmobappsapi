@@ -12,6 +12,7 @@ from features.calendar import (
 )
 from features.news import get_news
 from features.quotes import generate_daily_quote
+from features import quran
 from features.budget import service as budget_service
 from features.budget.chat_view import build_chat_budget_payload
 from features.budget.ai import qa as budget_qa
@@ -145,6 +146,15 @@ def route_intent(intent: str, params: dict, incoming: str) -> dict:
             "", lower
         ).strip(" :?!")
         return {"kind": "quote", "text": generate_daily_quote(context), "data": None}
+
+    elif intent == "quran":
+        ref = (quran.parse_ref(incoming)
+               or quran.find_by_topic(params.get("keyword"))
+               or quran.pick_random_ref())
+        verse = quran.get_verse(ref)
+        if verse is None:
+            return _text("📖 I couldn't load a verse right now. Please try again in a moment.")
+        return {"kind": "quran", "text": f"QS {verse['surah']} {verse['ref']} — {verse['translation']}", "data": verse}
 
     elif intent == "budget":
         data = budget_service.build_period_view()

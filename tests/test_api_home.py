@@ -8,7 +8,8 @@ def test_home_returns_composed_shape(client, auth_headers):
          patch("api.get_tasks_structured", return_value=[{"id": "t1", "title": "Buy milk", "status": "needsAction"}]), \
          patch("api.get_budget_summary", return_value=None), \
          patch("api.get_reminders_structured", return_value=[]) as mock_reminders, \
-         patch("api.get_quote_of_day", return_value={"quote": "q", "author": "a"}):
+         patch("api.get_quote_of_day", return_value={"quote": "q", "author": "a"}), \
+         patch("api.get_verse_of_day", return_value={"ref": "1:1", "surah": "S", "translation": "t"}):
         resp = client.get("/api/home", headers=auth_headers)
 
     assert resp.status_code == 200
@@ -18,6 +19,7 @@ def test_home_returns_composed_shape(client, auth_headers):
     assert body["budgetSummary"] is None
     assert body["reminders"] == []
     assert body["quoteOfDay"] == {"quote": "q", "author": "a"}
+    assert body["verseOfDay"] == {"ref": "1:1", "surah": "S", "translation": "t"}
     mock_reminders.assert_called_once_with(limit=2)
 
 
@@ -26,7 +28,8 @@ def test_home_returns_null_next_event_when_no_events(client, auth_headers):
          patch("api.get_tasks_structured", return_value=[]), \
          patch("api.get_budget_summary", return_value=None), \
          patch("api.get_reminders_structured", return_value=[]), \
-         patch("api.get_quote_of_day", return_value={"quote": "", "author": ""}):
+         patch("api.get_quote_of_day", return_value={"quote": "", "author": ""}), \
+         patch("api.get_verse_of_day", return_value=None):
         resp = client.get("/api/home", headers=auth_headers)
 
     assert resp.status_code == 200
@@ -53,7 +56,8 @@ def test_home_sources_run_concurrently_not_sequentially(client, auth_headers):
          patch("api.get_tasks_structured", side_effect=slow_list), \
          patch("api.get_budget_summary", side_effect=slow), \
          patch("api.get_reminders_structured", side_effect=slow_list), \
-         patch("api.get_quote_of_day", side_effect=slow_quote):
+         patch("api.get_quote_of_day", side_effect=slow_quote), \
+         patch("api.get_verse_of_day", side_effect=slow):
         start = time.monotonic()
         resp = client.get("/api/home", headers=auth_headers)
         elapsed = time.monotonic() - start

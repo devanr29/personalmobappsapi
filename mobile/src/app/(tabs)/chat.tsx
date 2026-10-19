@@ -1,5 +1,6 @@
-import { Alarm, Newspaper, Plus, Sparkle, Wallet } from "phosphor-react-native";
-import { useRef } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { Alarm, BookOpenText, Newspaper, Plus, Sparkle, Wallet } from "phosphor-react-native";
+import { useEffect, useRef } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -17,12 +18,27 @@ const QUICK_CHIPS = [
   { label: "Reminder", message: "remind me to ", IconComponent: Alarm },
   { label: "Budget", message: "budget", IconComponent: Wallet },
   { label: "News", message: "news", IconComponent: Newspaper },
+  { label: "Verse", message: "give me a quran verse", IconComponent: BookOpenText },
 ];
 
 export default function ChatScreen() {
   const theme = useTheme();
   const { messages, draft, setDraft, isAssistantTyping, sendMessage, newChat } = useChat();
   const scrollRef = useRef<ScrollView>(null);
+  const router = useRouter();
+  const { verse } = useLocalSearchParams<{ verse?: string }>();
+
+  // Home's Verse card and the verse push open chat with ?verse=2:255. Each
+  // verse starts a fresh chat: reset first (awaited, so the server reset
+  // can't wipe the verse turn saved right after), then send it once and
+  // clear the param so revisiting the tab doesn't send it again (tabs stay
+  // mounted, so tapping the card a second time sets it afresh).
+  useEffect(() => {
+    if (!verse) return;
+    router.setParams({ verse: undefined });
+    newChat().then(() => sendMessage(`quran ${verse}`));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verse]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={["top"]}>

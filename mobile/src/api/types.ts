@@ -70,15 +70,45 @@ export interface QuoteOfDay {
   author: string;
 }
 
+// features/quran.py get_verse_of_day() — the last pushed verse; null only
+// when alquran.cloud was unreachable and nothing had been pushed yet.
+export interface VerseOfDay {
+  ref: string;
+  surah: string;
+  translation: string;
+}
+
 export interface HomeResponse {
   tasks: Task[];
   nextEvent: CalendarEvent | null;
   budgetSummary: BudgetSnapshot | null;
   reminders: Reminder[];
   quoteOfDay: QuoteOfDay;
+  verseOfDay: VerseOfDay | null;
 }
 
-export type ChatKind = "text" | "task" | "budget" | "quote";
+export type ChatKind = "text" | "task" | "budget" | "quote" | "quran";
+
+// features/quran.py get_verse(). Arabic and translation come from
+// alquran.cloud; context/reflection are a Gemini summary of Tafsir Ibn
+// Kathir and are null when that step failed.
+export interface ChatQuranData {
+  ref: string;
+  surah: string;
+  surahNumber: number;
+  ayah: number;
+  arabic: string;
+  translation: string;
+  passage: {
+    range: string;
+    verses: { ref: string; translation: string }[];
+    isMidPassage: boolean;
+    note: string | null;
+  };
+  context: string | null;
+  reflection: string[] | null;
+  sources: { translation: string; tafsir: string | null };
+}
 
 export interface ChatTaskData {
   content: string;
@@ -105,9 +135,9 @@ export interface BudgetDeductionItem {
 export interface ChatResponse {
   kind: ChatKind;
   text: string;
-  data: ChatTaskData | ChatBudgetData | null;
+  data: ChatTaskData | ChatBudgetData | ChatQuranData | null;
 }
 
 export type ChatMessage =
   | { id: string; role: "user"; text: string }
-  | { id: string; role: "assistant"; kind: ChatKind; text: string; data: ChatTaskData | ChatBudgetData | null };
+  | { id: string; role: "assistant"; kind: ChatKind; text: string; data: ChatTaskData | ChatBudgetData | ChatQuranData | null };

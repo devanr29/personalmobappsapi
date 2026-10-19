@@ -1,5 +1,6 @@
 import contextvars
 import datetime
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, request
@@ -26,6 +27,7 @@ from features.notes import get_notes_structured, save_note, edit_note, delete_no
 from features.ideas import get_ideas_structured, save_idea, edit_idea, delete_idea
 from features.budget.service import get_summary as get_budget_summary
 from features.quotes import get_quote_of_day
+from features.quran import get_verse_of_day, parse_ref
 from features.news import get_news_structured, summarize_article
 from ai.brainstorm import ai_brainstorm
 from features.memory import semantic_search
@@ -91,12 +93,13 @@ def _submit_with_context(executor, fn, *args, **kwargs):
 
 @api_bp.route("/home", methods=["GET"])
 def home():
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         events_future    = _submit_with_context(executor, get_events_structured)
         tasks_future     = _submit_with_context(executor, get_tasks_structured)
         budget_future    = _submit_with_context(executor, get_budget_summary)
         reminders_future = _submit_with_context(executor, get_reminders_structured, limit=2)
         quote_future     = _submit_with_context(executor, get_quote_of_day)
+        verse_future     = _submit_with_context(executor, get_verse_of_day)
 
         events = events_future.result()
         return _ok({
@@ -105,12 +108,16 @@ def home():
             "budgetSummary":  budget_future.result(),
             "reminders":      reminders_future.result(),
             "quoteOfDay":     quote_future.result(),
+            "verseOfDay":     verse_future.result(),
         })
 
 
 # ================================================================
 # CHAT
 # ================================================================
+_QURAN_TAP_RE = re.compile(r"^quran\s+\d{1,3}:\d{1,3}$", re.IGNORECASE)
+
+
 @api_bp.route("/chat", methods=["POST"])
 def chat():
     body    = request.get_json(silent=True) or {}
@@ -118,9 +125,14 @@ def chat():
     if not message:
         return _err("VALIDATION_ERROR", "message is required.", 400)
 
-    classified = classify_intent(message)
-    intent     = classified.get("intent", "chat")
-    params     = classified.get("params", {})
+    # The Home Verse card opens chat with exactly "quran <s>:<a>" — route it
+    # straight to the quran intent instead of trusting the classifier.
+    if _QURAN_TAP_RE.match(message) and parse_ref(message):
+        intent, params = "quran", {}
+    else:
+        classified = classify_intent(message)
+        intent     = classified.get("intent", "chat")
+        params     = classified.get("params", {})
     result     = route_intent(intent, params, message)
 
     if intent != "chat" and result.get("text"):

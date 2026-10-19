@@ -1,10 +1,12 @@
-import { CheckCircle, Quotes } from "phosphor-react-native";
+import { BookOpenText, CheckCircle, Quotes } from "phosphor-react-native";
+import type { ReactNode } from "react";
 import { View } from "react-native";
 
 import { StackedBar } from "@/components/charts";
-import type { ChatBudgetData, ChatMessage, ChatTaskData } from "@/api/types";
+import type { ChatBudgetData, ChatMessage, ChatQuranData, ChatTaskData } from "@/api/types";
 import { HStack, Stack, Text } from "@/theme/primitives";
 import { useTheme } from "@/theme/ThemeProvider";
+import { useStyles } from "@/theme/useStyles";
 import { formatRupiah } from "@/utils/currency";
 import { parseQuote, stripMarkdown } from "@/utils/text";
 
@@ -50,6 +52,100 @@ function QuoteBubble({ text }: { text: string }) {
       </Text>
       <Text variant="meta" tone="muted">
         — {author}
+      </Text>
+    </Stack>
+  );
+}
+
+function QuranSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Stack gap={1}>
+      <Text variant="label" tone="muted">
+        {title}
+      </Text>
+      {children}
+    </Stack>
+  );
+}
+
+function QuranBubble({ data }: { data: ChatQuranData }) {
+  const theme = useTheme();
+  // Arabic with harakat needs a system font (the app's Latin font has no
+  // Arabic glyphs) and extra line height so stacked marks don't clip.
+  const styles = useStyles((t) => {
+    const size = t.type.title.fontSize ?? 23;
+    return {
+      arabic: {
+        fontSize: size,
+        lineHeight: size * 1.9,
+        fontFamily: undefined,
+        textAlign: "right" as const,
+        writingDirection: "rtl" as const,
+      },
+    };
+  });
+  const { passage } = data;
+  const sources = [data.sources.translation, data.sources.tafsir && `Tafsir ${data.sources.tafsir}`]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <Stack gap={3}>
+      <HStack gap={2} align="center">
+        <BookOpenText size={16} weight="fill" color={theme.colors.accent} />
+        <Text variant="bodyStrong">
+          QS {data.surah} {data.ref}
+        </Text>
+      </HStack>
+
+      <Text variant="body" selectable style={styles.arabic}>
+        {data.arabic}
+      </Text>
+
+      <Text variant="body" selectable>
+        {data.translation}
+      </Text>
+
+      {passage.isMidPassage && passage.verses.length > 1 ? (
+        <QuranSection title={`Part of a passage (${passage.range})`}>
+          {passage.note ? (
+            <Text variant="body" tone="secondary" selectable>
+              {passage.note}
+            </Text>
+          ) : null}
+          {passage.verses.map((v) => (
+            <Text
+              key={v.ref}
+              variant="meta"
+              tone={v.ref === data.ref ? "primary" : "muted"}
+              style={v.ref === data.ref ? { fontFamily: theme.fontFamily.medium } : undefined}
+              selectable
+            >
+              {v.ref} {v.translation}
+            </Text>
+          ))}
+        </QuranSection>
+      ) : null}
+
+      {data.context ? (
+        <QuranSection title="Context">
+          <Text variant="body" tone="secondary" selectable>
+            {data.context}
+          </Text>
+        </QuranSection>
+      ) : null}
+
+      {data.reflection?.length ? (
+        <QuranSection title="Reflection">
+          {data.reflection.map((point, i) => (
+            <Text key={i} variant="body" tone="secondary" selectable>
+              • {point}
+            </Text>
+          ))}
+        </QuranSection>
+      ) : null}
+
+      <Text variant="caption" tone="faint">
+        {sources}
       </Text>
     </Stack>
   );
@@ -146,6 +242,10 @@ function accessibilityLabelFor(message: ChatMessage): string {
   if (message.kind === "task" && message.data) {
     return `Task added: ${(message.data as ChatTaskData).content}`;
   }
+  if (message.kind === "quran" && message.data) {
+    const d = message.data as ChatQuranData;
+    return `Quran ${d.surah} ${d.ref}: ${d.translation}`;
+  }
   if (message.kind === "quote") {
     const { quote, author } = parseQuote(message.text);
     return `Quote: ${quote}, by ${author}`;
@@ -178,6 +278,8 @@ export function ChatBubble({ message }: { message: ChatMessage }) {
         <TaskBubble text={message.text} data={message.data as ChatTaskData} />
       ) : message.kind === "budget" && message.data ? (
         <BudgetBubble data={message.data as ChatBudgetData} />
+      ) : message.kind === "quran" && message.data ? (
+        <QuranBubble data={message.data as ChatQuranData} />
       ) : message.kind === "quote" ? (
         <QuoteBubble text={message.text} />
       ) : (

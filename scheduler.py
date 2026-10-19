@@ -14,6 +14,7 @@ scheduler = BackgroundScheduler(timezone=TZ_JKT)
 def register_jobs():
     from features.reminders import check_and_send_reminders
     from features.quotes import send_scheduled_quote
+    from features.quran import send_scheduled_verse
     from features.budget.alerts import run_budget_alerts
     from features.budget.ai.summary import run_weekly_digest
 
@@ -39,3 +40,7 @@ def register_jobs():
         hour="*/3", minute=0,
         id="quote_3h",
     )
+
+    # Quran verse push at 05:00 (after Subuh) and 20:00 WIB; the pushed
+    # verse becomes the Home Verse card's verse.
+    scheduler.add_job(send_scheduled_verse, "cron", hour="5,20", minute=0, id="quran_verse")

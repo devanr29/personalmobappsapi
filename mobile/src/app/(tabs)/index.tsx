@@ -14,6 +14,7 @@ import { ReminderStrip } from "@/components/ReminderStrip";
 import { ShortcutTile } from "@/components/ShortcutTile";
 import { StatCard } from "@/components/StatCard";
 import { TaskRow } from "@/components/TaskRow";
+import { VerseCard } from "@/components/VerseCard";
 import { useHome } from "@/hooks/useHome";
 import { AnimatedListItem, PressableScale } from "@/theme/motion";
 import { HStack, Stack, Text } from "@/theme/primitives";
@@ -166,6 +167,15 @@ export default function HomeScreen() {
               ) : null}
 
               <QuoteCard quote={data.quoteOfDay.quote} author={data.quoteOfDay.author} />
+
+              {data.verseOfDay ? (
+                <VerseCard
+                  refLabel={data.verseOfDay.ref}
+                  surah={data.verseOfDay.surah}
+                  translation={data.verseOfDay.translation}
+                  onPress={() => router.push({ pathname: "/chat", params: { verse: data.verseOfDay!.ref } })}
+                />
+              ) : null}
 
               <HStack gap={3}>
                 <ShortcutTile IconComponent={Note} label="Notes" tileIndex={0} onPress={() => router.push("/notes")} />
