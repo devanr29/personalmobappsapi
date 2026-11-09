@@ -13,8 +13,13 @@ Authorization: Bearer <token>
 ```
 
 Tokens are personal JWTs minted in the Wallet web app (Settings → REST API, Premium plan
-required). **90-day expiry.** Ours was minted 2026-08-10 and expires **2026-11-08** — the sync
-status endpoint should surface this so it doesn't fail silently as a 401 three months from now.
+required). Expiry is chosen when minting (90 days by default). The current token was minted
+2026-11-09 and expires **2027-11-09** (the previous one expired 2026-11-08). The sync status
+endpoint surfaces `tokenExpiresAt` so it doesn't fail silently as a 401.
+
+**Renewing:** put the new token in the server's `.env` as `WALLET_API_TOKEN`, then run
+`docker compose up -d api` (a plain `restart` does not re-read `env_file`). The mobile app
+never holds this token, so no APK rebuild or `eas update` is needed.
 
 A Wallet MCP server also exists at `https://mcp.wallet.budgetbakers.com` (OAuth or MCP token) for
 conversational access from Claude/ChatGPT — not used here, but worth remembering if `ai/chat.py`

@@ -75,7 +75,7 @@ CONV_WINDOW = 10   # keep last N user+assistant pairs in context
 # bills; there are no fallback defaults for those anymore.
 PAYROLL_DAY = 25
 
-# Wallet by BudgetBakers REST API token (JWT, 90-day expiry, minted in the
+# Wallet by BudgetBakers REST API token (JWT, expiry set when minted in the
 # Wallet web app). Optional — sync features degrade to "unavailable"
 # rather than crashing boot when unset, since this is a personal
 # integration and not core to the app.
